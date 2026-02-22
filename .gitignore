@@ -1,0 +1,9 @@
+tmp/
+bin/
+dist/
+coverage/
+.env
+.env.*
+.DS_Store
+.idea/
+.vscode/

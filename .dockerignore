@@ -1,0 +1,9 @@
+tmp/
+bin/
+dist/
+coverage/
+.git
+.env
+.env.*
+.idea/
+.vscode/
