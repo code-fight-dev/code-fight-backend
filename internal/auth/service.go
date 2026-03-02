@@ -136,8 +136,17 @@ func (s *Service) SignInWithOAuth(ctx context.Context, identity OAuthIdentity, m
 		ProviderUserID: identity.ProviderUserID,
 		ProviderEmail:  email,
 	})
-	if err != nil && !errors.Is(err, ErrOAuthAccountLinked) {
-		return AuthResult{}, err
+	if err != nil {
+		if !errors.Is(err, ErrOAuthAccountLinked) {
+			return AuthResult{}, err
+		}
+
+		resolvedUser, resolveErr := s.resolveOAuthLinkedUser(ctx, identity.Provider, identity.ProviderUserID, user.ID)
+		if resolveErr != nil {
+			return AuthResult{}, resolveErr
+		}
+
+		user = resolvedUser
 	}
 
 	return s.createSessionForUser(ctx, user, meta)
@@ -158,10 +167,6 @@ func (s *Service) SignOut(ctx context.Context, sessionToken string) error {
 func (s *Service) CurrentUser(ctx context.Context, sessionToken string) (PublicUser, error) {
 	if sessionToken == "" {
 		return PublicUser{}, ErrUnauthorized
-	}
-
-	if err := s.repository.DeleteExpiredSessions(ctx, time.Now()); err != nil {
-		return PublicUser{}, err
 	}
 
 	session, err := s.repository.GetSessionByTokenHash(ctx, hashSessionToken(sessionToken))
@@ -188,6 +193,52 @@ func (s *Service) CurrentUser(ctx context.Context, sessionToken string) (PublicU
 	}
 
 	return user.Public(), nil
+}
+
+func (s *Service) CleanupExpiredSessions(ctx context.Context) error {
+	if err := s.repository.DeleteExpiredSessions(ctx, time.Now()); err != nil {
+		return fmt.Errorf("cleanup expired sessions: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Service) resolveOAuthLinkedUser(ctx context.Context, provider OAuthProvider, providerUserID string, expectedUserID uuid.UUID) (User, error) {
+	account, err := s.repository.GetOAuthAccount(ctx, provider, providerUserID)
+	if err == nil {
+		if account.UserID != expectedUserID {
+			return User{}, ErrOAuthAccountLinked
+		}
+
+		user, err := s.repository.GetUserByID(ctx, account.UserID)
+		if err != nil {
+			return User{}, fmt.Errorf("get oauth-linked user by id: %w", err)
+		}
+
+		return user, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return User{}, fmt.Errorf("re-read oauth account: %w", err)
+	}
+
+	account, err = s.repository.GetOAuthAccountByUserProvider(ctx, expectedUserID, provider)
+	if err == nil {
+		if account.ProviderUserID != providerUserID {
+			return User{}, ErrOAuthAccountLinked
+		}
+
+		user, err := s.repository.GetUserByID(ctx, account.UserID)
+		if err != nil {
+			return User{}, fmt.Errorf("get provider-linked user by id: %w", err)
+		}
+
+		return user, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return User{}, fmt.Errorf("get oauth account by user/provider: %w", err)
+	}
+
+	return User{}, ErrOAuthAccountLinked
 }
 
 func (s *Service) createSessionForUser(ctx context.Context, user User, meta SessionMeta) (AuthResult, error) {

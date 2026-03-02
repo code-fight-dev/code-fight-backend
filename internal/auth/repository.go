@@ -106,6 +106,29 @@ func (r *Repository) GetOAuthAccount(ctx context.Context, provider OAuthProvider
 	return account, nil
 }
 
+func (r *Repository) GetOAuthAccountByUserProvider(ctx context.Context, userID uuid.UUID, provider OAuthProvider) (OAuthAccount, error) {
+	query := `
+		select id, user_id, provider, provider_user_id, provider_email, created_at
+		from oauth_accounts
+		where user_id = $1 and provider = $2
+	`
+
+	row := r.db.QueryRow(ctx, query, userID, provider)
+	var account OAuthAccount
+	if err := row.Scan(
+		&account.ID,
+		&account.UserID,
+		&account.Provider,
+		&account.ProviderUserID,
+		&account.ProviderEmail,
+		&account.CreatedAt,
+	); err != nil {
+		return OAuthAccount{}, normalizeNotFound(err)
+	}
+
+	return account, nil
+}
+
 func (r *Repository) CreateOAuthAccount(ctx context.Context, account OAuthAccount) (OAuthAccount, error) {
 	query := `
 		insert into oauth_accounts (id, user_id, provider, provider_user_id, provider_email)
