@@ -4,11 +4,13 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/database"
 	httpserver "code-fight-backend/internal/http"
+	"code-fight-backend/internal/users"
 )
 
 func main() {
@@ -61,5 +63,25 @@ func main() {
 	if err := app.Listen(cfg.ListenAddr()); err != nil {
 		logger.Error("listen", "error", err)
 		os.Exit(1)
+	}
+}
+
+func startSessionCleanupLoop(ctx context.Context, logger *slog.Logger, authService *auth.Service, interval time.Duration) {
+	if err := authService.CleanupExpiredSessions(ctx); err != nil {
+		logger.Error("cleanup expired sessions", "error", err)
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := authService.CleanupExpiredSessions(ctx); err != nil {
+				logger.Error("cleanup expired sessions", "error", err)
+			}
+		}
 	}
 }
