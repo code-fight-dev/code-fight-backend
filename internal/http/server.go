@@ -5,6 +5,7 @@ import (
 
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/config"
+	"code-fight-backend/internal/users"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -12,7 +13,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 )
 
-func New(cfg config.Config, authHandler *auth.Handler) *fiber.App {
+func New(cfg config.Config, authHandler *auth.Handler, usersHandler *users.Handler) *fiber.App {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: jsonErrorHandler,
 	})
@@ -37,6 +38,10 @@ func New(cfg config.Config, authHandler *auth.Handler) *fiber.App {
 	authGroup.Use(newAuthLimiter())
 	authGroup.Use(requireAllowedOrigin(cfg.AllowedOrigins))
 	authHandler.RegisterRoutes(authGroup)
+
+	usersGroup := app.Group("/users")
+	usersGroup.Use(requireAllowedOrigin(cfg.AllowedOrigins))
+	usersHandler.RegisterRoutes(usersGroup)
 
 	return app
 }

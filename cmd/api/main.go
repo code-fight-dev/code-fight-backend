@@ -46,8 +46,15 @@ func main() {
 		cfg.OAuthStateTTL,
 		cfg.SessionSecure,
 	)
+	usersRepository := users.NewRepository(db)
+	usersService := users.NewService(usersRepository)
+	usersHandler := users.NewHandler(usersService)
 
-	app := httpserver.New(cfg, authHandler)
+	if cfg.SessionCleanupInterval > 0 {
+		go startSessionCleanupLoop(context.Background(), logger, authService, cfg.SessionCleanupInterval)
+	}
+
+	app := httpserver.New(cfg, authHandler, usersHandler)
 
 	logger.Info("starting api", "addr", cfg.ListenAddr(), "app_env", cfg.AppEnv)
 
