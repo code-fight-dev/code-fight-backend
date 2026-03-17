@@ -3,6 +3,9 @@ create table if not exists users (
     email text not null,
     username text not null,
     password_hash text not null,
+    bio text not null default '',
+    avatar_url text not null default '',
+    country text not null default '',
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );

@@ -22,9 +22,19 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 
 func (r *Repository) CreateUser(ctx context.Context, user User) (User, error) {
 	query := `
-		insert into users (id, email, username, password_hash)
-		values ($1, $2, $3, $4)
-		returning id, email, username, password_hash, created_at, updated_at
+		with inserted_user as (
+			insert into users (id, email, username, password_hash)
+			values ($1, $2, $3, $4)
+			returning id, email, username, password_hash, created_at, updated_at
+		),
+		inserted_rating as (
+			insert into user_ratings (user_id, mode, rating, rated_games, wins, losses, draws)
+			select id, 'global', 1000, 0, 0, 0, 0
+			from inserted_user
+			on conflict (user_id, mode) do nothing
+		)
+		select id, email, username, password_hash, created_at, updated_at
+		from inserted_user
 	`
 
 	if err := r.db.QueryRow(ctx, query,

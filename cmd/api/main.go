@@ -9,6 +9,7 @@ import (
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/database"
+	"code-fight-backend/internal/matches"
 	httpserver "code-fight-backend/internal/http"
 	"code-fight-backend/internal/users"
 )
@@ -51,12 +52,15 @@ func main() {
 	usersRepository := users.NewRepository(db)
 	usersService := users.NewService(usersRepository)
 	usersHandler := users.NewHandler(usersService)
+	matchesRepository := matches.NewRepository(db)
+	matchesService := matches.NewService(matchesRepository)
+	matchesHandler := matches.NewHandler(matchesService)
 
 	if cfg.SessionCleanupInterval > 0 {
 		go startSessionCleanupLoop(context.Background(), logger, authService, cfg.SessionCleanupInterval)
 	}
 
-	app := httpserver.New(cfg, authHandler, usersHandler)
+	app := httpserver.New(cfg, authHandler, usersHandler, matchesHandler)
 
 	logger.Info("starting api", "addr", cfg.ListenAddr(), "app_env", cfg.AppEnv)
 
