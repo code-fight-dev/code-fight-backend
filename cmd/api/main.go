@@ -9,8 +9,8 @@ import (
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/database"
-	"code-fight-backend/internal/matches"
 	httpserver "code-fight-backend/internal/http"
+	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/users"
 )
 
@@ -38,7 +38,13 @@ func main() {
 
 	authRepository := auth.NewRepository(db)
 	authService := auth.NewService(authRepository, cfg.SessionTTL)
-	oauthClient := auth.NewOAuthClient(cfg.BackendBaseURL, cfg.GitHubClientID, cfg.GitHubSecret, cfg.GoogleClientID, cfg.GoogleSecret)
+	oauthClient := auth.NewOAuthClient(
+		cfg.BackendBaseURL,
+		cfg.GitHubClientID,
+		cfg.GitHubSecret,
+		cfg.GoogleClientID,
+		cfg.GoogleSecret,
+	)
 	authHandler := auth.NewHandler(
 		authService,
 		oauthClient,
@@ -51,13 +57,16 @@ func main() {
 	)
 	usersRepository := users.NewRepository(db)
 	usersService := users.NewService(usersRepository)
-	usersHandler := users.NewHandler(usersService)
+	usersHandler := users.NewHandler(usersService, authService, cfg.SessionCookieName)
 	matchesRepository := matches.NewRepository(db)
 	matchesService := matches.NewService(matchesRepository)
 	matchesHandler := matches.NewHandler(matchesService)
 
+	cleanupCtx, stopSessionCleanup := context.WithCancel(context.Background())
+	defer stopSessionCleanup()
+
 	if cfg.SessionCleanupInterval > 0 {
-		go startSessionCleanupLoop(context.Background(), logger, authService, cfg.SessionCleanupInterval)
+		go startSessionCleanupLoop(cleanupCtx, logger, authService, cfg.SessionCleanupInterval)
 	}
 
 	app := httpserver.New(cfg, authHandler, usersHandler, matchesHandler)

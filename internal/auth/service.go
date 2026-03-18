@@ -13,7 +13,18 @@ import (
 	"github.com/google/uuid"
 )
 
-var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9_]{3,24}$`)
+const (
+	oauthUsernameFallbackPrefix = "player"
+	oauthUsernameMaxAttempts    = 10
+	passwordMaxLength           = 72
+	passwordMinLength           = 8
+	usernameMinLength           = 3
+	usernameMaxLength           = 24
+)
+
+var usernamePattern = regexp.MustCompile(
+	fmt.Sprintf("^[a-zA-Z0-9_]{%d,%d}$", usernameMinLength, usernameMaxLength),
+)
 
 type Service struct {
 	repository *Repository
@@ -54,7 +65,9 @@ func (s *Service) SignUp(ctx context.Context, input SignUpInput, meta SessionMet
 		ID:           uuid.New(),
 		Email:        email,
 		Username:     username,
+		DisplayName:  username,
 		PasswordHash: passwordHash,
+		AvatarSource: AvatarSourceNone,
 	})
 	if err != nil {
 		return AuthResult{}, err
@@ -87,6 +100,7 @@ func (s *Service) SignIn(ctx context.Context, input SignInInput, meta SessionMet
 
 func (s *Service) SignInWithOAuth(ctx context.Context, identity OAuthIdentity, meta SessionMeta) (AuthResult, error) {
 	email := strings.ToLower(strings.TrimSpace(identity.Email))
+	avatarURL := strings.TrimSpace(identity.AvatarURL)
 	if email == "" || !identity.EmailVerified {
 		return AuthResult{}, ErrOAuthEmailRequired
 	}
@@ -119,10 +133,13 @@ func (s *Service) SignInWithOAuth(ctx context.Context, identity OAuthIdentity, m
 		}
 
 		user, err = s.repository.CreateUser(ctx, User{
-			ID:           uuid.New(),
-			Email:        email,
-			Username:     username,
-			PasswordHash: randomPasswordHash,
+			ID:                uuid.New(),
+			Email:             email,
+			Username:          username,
+			DisplayName:       resolveOAuthDisplayName(identity, username),
+			PasswordHash:      randomPasswordHash,
+			ProviderAvatarURL: avatarURL,
+			AvatarSource:      resolveAvatarSource(avatarURL),
 		})
 		if err != nil {
 			return AuthResult{}, err
@@ -147,6 +164,10 @@ func (s *Service) SignInWithOAuth(ctx context.Context, identity OAuthIdentity, m
 		}
 
 		user = resolvedUser
+	}
+
+	if err := s.repository.UpdateProviderAvatar(ctx, user.ID, avatarURL); err != nil {
+		return AuthResult{}, fmt.Errorf("update oauth provider avatar: %w", err)
 	}
 
 	return s.createSessionForUser(ctx, user, meta)
@@ -178,7 +199,8 @@ func (s *Service) CurrentUser(ctx context.Context, sessionToken string) (PublicU
 		return PublicUser{}, fmt.Errorf("get session: %w", err)
 	}
 
-	if session.ExpiresAt.Before(time.Now()) {
+	now := time.Now()
+	if session.ExpiresAt.Before(now) {
 		_ = s.repository.DeleteSessionByTokenHash(ctx, session.TokenHash)
 		return PublicUser{}, ErrUnauthorized
 	}
@@ -270,26 +292,36 @@ func (s *Service) createSessionForUser(ctx context.Context, user User, meta Sess
 func normalizeSignUpInput(input SignUpInput) (string, string, string, error) {
 	username := strings.TrimSpace(input.Username)
 	if !usernamePattern.MatchString(username) {
-		return "", "", "", fmt.Errorf("%w: username must be 3-24 chars and use letters, numbers, or underscores", ErrInvalidInput)
+		return "", "", "", fmt.Errorf(
+			"%w: username must be %d-%d chars and use letters, numbers, or underscores",
+			ErrInvalidInput,
+			usernameMinLength,
+			usernameMaxLength,
+		)
 	}
 
-	email := strings.ToLower(strings.TrimSpace(input.Email))
-	if _, err := mail.ParseAddress(email); err != nil {
-		return "", "", "", fmt.Errorf("%w: valid email is required", ErrInvalidInput)
+	email, err := normalizeEmail(input.Email)
+	if err != nil {
+		return "", "", "", err
 	}
 
 	password := input.Password
-	if len(password) < 8 || len(password) > 72 {
-		return "", "", "", fmt.Errorf("%w: password must be between 8 and 72 characters", ErrInvalidInput)
+	if len(password) < passwordMinLength || len(password) > passwordMaxLength {
+		return "", "", "", fmt.Errorf(
+			"%w: password must be between %d and %d characters",
+			ErrInvalidInput,
+			passwordMinLength,
+			passwordMaxLength,
+		)
 	}
 
 	return username, email, password, nil
 }
 
 func normalizeSignInInput(input SignInInput) (string, string, error) {
-	email := strings.ToLower(strings.TrimSpace(input.Email))
-	if _, err := mail.ParseAddress(email); err != nil {
-		return "", "", fmt.Errorf("%w: valid email is required", ErrInvalidInput)
+	email, err := normalizeEmail(input.Email)
+	if err != nil {
+		return "", "", err
 	}
 
 	password := input.Password
@@ -306,18 +338,18 @@ func (s *Service) generateOAuthUsername(ctx context.Context, identity OAuthIdent
 		base = sanitizeUsernameCandidate(strings.Split(strings.ToLower(strings.TrimSpace(identity.Email)), "@")[0])
 	}
 	if base == "" {
-		base = "player"
+		base = oauthUsernameFallbackPrefix
 	}
 
-	if len(base) > 24 {
-		base = base[:24]
+	if len(base) > usernameMaxLength {
+		base = base[:usernameMaxLength]
 	}
-	if len(base) < 3 {
-		base = "player"
+	if len(base) < usernameMinLength {
+		base = oauthUsernameFallbackPrefix
 	}
 
 	candidate := base
-	for attempt := 0; attempt < 10; attempt++ {
+	for attempt := 0; attempt < oauthUsernameMaxAttempts; attempt++ {
 		if _, err := s.repository.GetUserByUsername(ctx, candidate); errors.Is(err, ErrNotFound) {
 			return candidate, nil
 		} else if err != nil {
@@ -326,13 +358,13 @@ func (s *Service) generateOAuthUsername(ctx context.Context, identity OAuthIdent
 
 		suffix := "_" + strconv.Itoa(attempt+1)
 		trimmedBase := base
-		if len(trimmedBase)+len(suffix) > 24 {
-			trimmedBase = trimmedBase[:24-len(suffix)]
+		if len(trimmedBase)+len(suffix) > usernameMaxLength {
+			trimmedBase = trimmedBase[:usernameMaxLength-len(suffix)]
 		}
 		candidate = trimmedBase + suffix
 	}
 
-	return "player_" + strings.ToLower(uuid.NewString()[:8]), nil
+	return oauthUsernameFallbackPrefix + "_" + strings.ToLower(uuid.NewString()[:8]), nil
 }
 
 func sanitizeUsernameCandidate(raw string) string {
@@ -352,9 +384,35 @@ func sanitizeUsernameCandidate(raw string) string {
 
 	result := builder.String()
 	result = strings.Trim(result, "_")
-	if len(result) > 24 {
-		result = result[:24]
+	if len(result) > usernameMaxLength {
+		result = result[:usernameMaxLength]
 	}
 
 	return result
+}
+
+func normalizeEmail(raw string) (string, error) {
+	email := strings.ToLower(strings.TrimSpace(raw))
+	if _, err := mail.ParseAddress(email); err != nil {
+		return "", fmt.Errorf("%w: valid email is required", ErrInvalidInput)
+	}
+
+	return email, nil
+}
+
+func resolveAvatarSource(avatarURL string) string {
+	if strings.TrimSpace(avatarURL) != "" {
+		return AvatarSourceProvider
+	}
+
+	return AvatarSourceNone
+}
+
+func resolveOAuthDisplayName(identity OAuthIdentity, fallbackUsername string) string {
+	displayName := strings.TrimSpace(identity.DisplayName)
+	if displayName != "" {
+		return displayName
+	}
+
+	return fallbackUsername
 }

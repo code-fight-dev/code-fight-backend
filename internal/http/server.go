@@ -29,7 +29,7 @@ func New(
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     strings.Join(cfg.AllowedOrigins, ","),
 		AllowHeaders:     "Origin, Content-Type, Accept",
-		AllowMethods:     "GET,POST,HEAD,OPTIONS",
+		AllowMethods:     "GET,POST,PATCH,HEAD,OPTIONS",
 		AllowCredentials: true,
 	}))
 
@@ -40,17 +40,22 @@ func New(
 		})
 	})
 
-	authGroup := app.Group("/auth")
-	authGroup.Use(newAuthLimiter())
-	authGroup.Use(requireAllowedOrigin(cfg.AllowedOrigins))
+	protectedGroup := func(path string, middlewares ...fiber.Handler) fiber.Router {
+		group := app.Group(path)
+		for _, middleware := range middlewares {
+			group.Use(middleware)
+		}
+		group.Use(requireAllowedOrigin(cfg.AllowedOrigins))
+		return group
+	}
+
+	authGroup := protectedGroup("/auth", newAuthLimiter())
 	authHandler.RegisterRoutes(authGroup)
 
-	usersGroup := app.Group("/users")
-	usersGroup.Use(requireAllowedOrigin(cfg.AllowedOrigins))
+	usersGroup := protectedGroup("/users")
 	usersHandler.RegisterRoutes(usersGroup)
 
-	matchesGroup := app.Group("/matches")
-	matchesGroup.Use(requireAllowedOrigin(cfg.AllowedOrigins))
+	matchesGroup := protectedGroup("/matches")
 	matchesHandler.RegisterRoutes(matchesGroup)
 
 	return app
