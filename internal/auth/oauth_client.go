@@ -12,6 +12,16 @@ import (
 	"time"
 )
 
+const (
+	githubAccessTokenURL = "https://github.com/login/oauth/access_token"
+	githubAuthorizeURL   = "https://github.com/login/oauth/authorize"
+	githubEmailsURL      = "https://api.github.com/user/emails"
+	githubUserURL        = "https://api.github.com/user"
+	googleAuthorizeURL   = "https://accounts.google.com/o/oauth2/v2/auth"
+	googleTokenURL       = "https://oauth2.googleapis.com/token"
+	googleUserInfoURL    = "https://openidconnect.googleapis.com/v1/userinfo"
+)
+
 type OAuthClient struct {
 	backendBaseURL string
 	httpClient     *http.Client
@@ -47,7 +57,7 @@ func (c *OAuthClient) AuthorizationURL(provider OAuthProvider, state string) (st
 		values.Set("scope", "read:user user:email")
 		values.Set("state", state)
 
-		return "https://github.com/login/oauth/authorize?" + values.Encode(), nil
+		return githubAuthorizeURL + "?" + values.Encode(), nil
 	case OAuthProviderGoogle:
 		if c.googleClientID == "" || c.googleSecret == "" {
 			return "", ErrOAuthUnavailable
@@ -61,7 +71,7 @@ func (c *OAuthClient) AuthorizationURL(provider OAuthProvider, state string) (st
 		values.Set("state", state)
 		values.Set("prompt", "select_account")
 
-		return "https://accounts.google.com/o/oauth2/v2/auth?" + values.Encode(), nil
+		return googleAuthorizeURL + "?" + values.Encode(), nil
 	default:
 		return "", ErrInvalidInput
 	}
@@ -89,13 +99,12 @@ func (c *OAuthClient) exchangeGitHub(ctx context.Context, code string) (OAuthIde
 	values.Set("code", code)
 	values.Set("redirect_uri", c.callbackURL(OAuthProviderGitHub))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://github.com/login/oauth/access_token", strings.NewReader(values.Encode()))
+	req, err := newOAuthFormRequest(ctx, http.MethodPost, githubAccessTokenURL, values)
 	if err != nil {
 		return OAuthIdentity{}, err
 	}
 
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	var tokenResponse struct {
 		AccessToken string `json:"access_token"`
@@ -107,18 +116,19 @@ func (c *OAuthClient) exchangeGitHub(ctx context.Context, code string) (OAuthIde
 		return OAuthIdentity{}, ErrUnauthorized
 	}
 
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", nil)
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, githubUserURL, nil)
 	if err != nil {
 		return OAuthIdentity{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+tokenResponse.AccessToken)
+	setBearerAuthorization(req, tokenResponse.AccessToken)
 
 	var githubUser struct {
-		ID    int64  `json:"id"`
-		Login string `json:"login"`
-		Email string `json:"email"`
-		Name  string `json:"name"`
+		ID        int64  `json:"id"`
+		Login     string `json:"login"`
+		Email     string `json:"email"`
+		Name      string `json:"name"`
+		AvatarURL string `json:"avatar_url"`
 	}
 	if err := c.doJSON(req, &githubUser); err != nil {
 		return OAuthIdentity{}, err
@@ -128,12 +138,12 @@ func (c *OAuthClient) exchangeGitHub(ctx context.Context, code string) (OAuthIde
 	verified := email != ""
 
 	if email == "" {
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user/emails", nil)
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, githubEmailsURL, nil)
 		if err != nil {
 			return OAuthIdentity{}, err
 		}
 		req.Header.Set("Accept", "application/vnd.github+json")
-		req.Header.Set("Authorization", "Bearer "+tokenResponse.AccessToken)
+		setBearerAuthorization(req, tokenResponse.AccessToken)
 
 		var emails []struct {
 			Email    string `json:"email"`
@@ -170,6 +180,7 @@ func (c *OAuthClient) exchangeGitHub(ctx context.Context, code string) (OAuthIde
 		EmailVerified:  verified,
 		Username:       githubUser.Login,
 		DisplayName:    githubUser.Name,
+		AvatarURL:      strings.TrimSpace(githubUser.AvatarURL),
 	}, nil
 }
 
@@ -181,12 +192,10 @@ func (c *OAuthClient) exchangeGoogle(ctx context.Context, code string) (OAuthIde
 	values.Set("redirect_uri", c.callbackURL(OAuthProviderGoogle))
 	values.Set("grant_type", "authorization_code")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://oauth2.googleapis.com/token", strings.NewReader(values.Encode()))
+	req, err := newOAuthFormRequest(ctx, http.MethodPost, googleTokenURL, values)
 	if err != nil {
 		return OAuthIdentity{}, err
 	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	var tokenResponse struct {
 		AccessToken string `json:"access_token"`
@@ -198,11 +207,11 @@ func (c *OAuthClient) exchangeGoogle(ctx context.Context, code string) (OAuthIde
 		return OAuthIdentity{}, ErrUnauthorized
 	}
 
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, "https://openidconnect.googleapis.com/v1/userinfo", nil)
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, googleUserInfoURL, nil)
 	if err != nil {
 		return OAuthIdentity{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+tokenResponse.AccessToken)
+	setBearerAuthorization(req, tokenResponse.AccessToken)
 
 	var googleUser struct {
 		Sub           string `json:"sub"`
@@ -210,6 +219,7 @@ func (c *OAuthClient) exchangeGoogle(ctx context.Context, code string) (OAuthIde
 		EmailVerified bool   `json:"email_verified"`
 		Name          string `json:"name"`
 		GivenName     string `json:"given_name"`
+		Picture       string `json:"picture"`
 	}
 	if err := c.doJSON(req, &googleUser); err != nil {
 		return OAuthIdentity{}, err
@@ -227,6 +237,7 @@ func (c *OAuthClient) exchangeGoogle(ctx context.Context, code string) (OAuthIde
 		EmailVerified:  googleUser.EmailVerified,
 		Username:       username,
 		DisplayName:    googleUser.Name,
+		AvatarURL:      strings.TrimSpace(googleUser.Picture),
 	}, nil
 }
 
@@ -247,4 +258,18 @@ func (c *OAuthClient) doJSON(req *http.Request, destination any) error {
 	}
 
 	return nil
+}
+
+func newOAuthFormRequest(ctx context.Context, method string, requestURL string, values url.Values) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, strings.NewReader(values.Encode()))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req, nil
+}
+
+func setBearerAuthorization(req *http.Request, accessToken string) {
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 }

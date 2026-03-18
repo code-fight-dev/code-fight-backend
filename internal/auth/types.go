@@ -6,13 +6,23 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	AvatarSourceNone     = "none"
+	AvatarSourceProvider = "provider"
+	AvatarSourceCustom   = "custom"
+)
+
 type User struct {
-	ID           uuid.UUID
-	Email        string
-	Username     string
-	PasswordHash string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID                uuid.UUID
+	Email             string
+	Username          string
+	DisplayName       string
+	PasswordHash      string
+	AvatarURL         string
+	ProviderAvatarURL string
+	AvatarSource      string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type Session struct {
@@ -48,6 +58,7 @@ type OAuthIdentity struct {
 	EmailVerified  bool
 	Username       string
 	DisplayName    string
+	AvatarURL      string
 }
 
 type PublicUser struct {
