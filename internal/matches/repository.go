@@ -21,76 +21,119 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
+const matchSelectColumns = `
+	id,
+	rating_mode,
+	task_mode,
+	task_id,
+	task_difficulty_snapshot,
+	player1_id,
+	player2_id,
+	winner_id,
+	status,
+	judge_status,
+	result_type,
+	winning_reason,
+	is_rated,
+	rating_applied,
+	player1_score,
+	player2_score,
+	player1_attempts,
+	player2_attempts,
+	player1_solved,
+	player2_solved,
+	player1_solved_at,
+	player2_solved_at,
+	started_at,
+	finished_at,
+	created_at,
+	updated_at
+`
+
 func (r *Repository) CreateMatch(ctx context.Context, match Match) (Match, error) {
 	query := `
 		insert into matches (
-			id, mode, player1_id, player2_id, winner_id, status,
-			is_rated, rating_applied, started_at, finished_at, created_at, updated_at
+			id,
+			rating_mode,
+			task_mode,
+			task_id,
+			task_difficulty_snapshot,
+			player1_id,
+			player2_id,
+			winner_id,
+			status,
+			judge_status,
+			result_type,
+			winning_reason,
+			is_rated,
+			rating_applied,
+			player1_score,
+			player2_score,
+			player1_attempts,
+			player2_attempts,
+			player1_solved,
+			player2_solved,
+			player1_solved_at,
+			player2_solved_at,
+			started_at,
+			finished_at,
+			created_at,
+			updated_at
 		)
-		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now())
-		returning
-			id, mode, player1_id, player2_id, winner_id, status,
-			is_rated, rating_applied, started_at, finished_at, created_at, updated_at
-	`
+		values (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, $9, $10,
+			$11, $12, $13, $14, $15,
+			$16, $17, $18, $19, $20,
+			$21, $22, $23, $24, now(), now()
+		)
+		returning ` + matchSelectColumns
 
-	err := r.db.QueryRow(
+	row := r.db.QueryRow(
 		ctx,
 		query,
 		match.ID,
-		match.Mode,
+		match.RatingMode,
+		match.TaskMode,
+		match.TaskID,
+		match.TaskDifficultySnapshot,
 		match.Player1ID,
 		match.Player2ID,
 		match.WinnerID,
 		match.Status,
+		match.JudgeStatus,
+		match.ResultType,
+		match.WinningReason,
 		match.IsRated,
 		match.RatingApplied,
+		match.Player1Score,
+		match.Player2Score,
+		match.Player1Attempts,
+		match.Player2Attempts,
+		match.Player1Solved,
+		match.Player2Solved,
+		match.Player1SolvedAt,
+		match.Player2SolvedAt,
 		match.StartedAt,
 		match.FinishedAt,
-	).Scan(
-		&match.ID,
-		&match.Mode,
-		&match.Player1ID,
-		&match.Player2ID,
-		&match.WinnerID,
-		&match.Status,
-		&match.IsRated,
-		&match.RatingApplied,
-		&match.StartedAt,
-		&match.FinishedAt,
-		&match.CreatedAt,
-		&match.UpdatedAt,
 	)
+
+	created, err := scanMatch(row)
 	if err != nil {
 		return Match{}, fmt.Errorf("create match: %w", err)
 	}
 
-	return match, nil
+	return created, nil
 }
 
 func (r *Repository) GetMatch(ctx context.Context, matchID uuid.UUID) (Match, error) {
 	query := `
-		select
-			id, mode, player1_id, player2_id, winner_id, status,
-			is_rated, rating_applied, started_at, finished_at, created_at, updated_at
+		select ` + matchSelectColumns + `
 		from matches
 		where id = $1
 	`
 
-	var match Match
-	err := r.db.QueryRow(ctx, query, matchID).Scan(
-		&match.ID,
-		&match.Mode,
-		&match.Player1ID,
-		&match.Player2ID,
-		&match.WinnerID,
-		&match.Status,
-		&match.IsRated,
-		&match.RatingApplied,
-		&match.StartedAt,
-		&match.FinishedAt,
-		&match.CreatedAt,
-		&match.UpdatedAt,
-	)
+	match, err := scanMatch(r.db.QueryRow(ctx, query, matchID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Match{}, ErrMatchNotFound
@@ -128,29 +171,19 @@ func (r *Repository) StartMatch(ctx context.Context, matchID uuid.UUID) (Match, 
 	query := `
 		update matches
 		set status = $2,
+			judge_status = $3,
 			started_at = now(),
 			updated_at = now()
 		where id = $1
-		returning
-			id, mode, player1_id, player2_id, winner_id, status,
-			is_rated, rating_applied, started_at, finished_at, created_at, updated_at
-	`
+		returning ` + matchSelectColumns
 
-	var updated Match
-	err = tx.QueryRow(ctx, query, matchID, MatchStatusRunning).Scan(
-		&updated.ID,
-		&updated.Mode,
-		&updated.Player1ID,
-		&updated.Player2ID,
-		&updated.WinnerID,
-		&updated.Status,
-		&updated.IsRated,
-		&updated.RatingApplied,
-		&updated.StartedAt,
-		&updated.FinishedAt,
-		&updated.CreatedAt,
-		&updated.UpdatedAt,
-	)
+	updated, err := scanMatch(tx.QueryRow(
+		ctx,
+		query,
+		matchID,
+		MatchStatusRunning,
+		JudgeStatusRunning,
+	))
 	if err != nil {
 		return Match{}, fmt.Errorf("start match: %w", err)
 	}
@@ -187,10 +220,23 @@ func (r *Repository) CancelMatch(ctx context.Context, matchID uuid.UUID) error {
 	query := `
 		update matches
 		set status = $2,
+			result_type = $3,
+			winning_reason = $4,
+			judge_status = $5,
+			finished_at = coalesce(finished_at, now()),
 			updated_at = now()
 		where id = $1
 	`
-	ct, err := tx.Exec(ctx, query, matchID, MatchStatusCancelled)
+
+	ct, err := tx.Exec(
+		ctx,
+		query,
+		matchID,
+		MatchStatusCancelled,
+		MatchResultTypeCancelled,
+		WinningReasonCancelled,
+		JudgeStatusFailed,
+	)
 	if err != nil {
 		return fmt.Errorf("cancel match: %w", err)
 	}
@@ -207,9 +253,7 @@ func (r *Repository) CancelMatch(ctx context.Context, matchID uuid.UUID) error {
 
 func (r *Repository) ListUserMatches(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Match, error) {
 	query := `
-		select
-			id, mode, player1_id, player2_id, winner_id, status,
-			is_rated, rating_applied, started_at, finished_at, created_at, updated_at
+		select ` + matchSelectColumns + `
 		from matches
 		where player1_id = $1 or player2_id = $1
 		order by created_at desc
@@ -224,21 +268,8 @@ func (r *Repository) ListUserMatches(ctx context.Context, userID uuid.UUID, limi
 
 	matches := make([]Match, 0, limit)
 	for rows.Next() {
-		var match Match
-		if err := rows.Scan(
-			&match.ID,
-			&match.Mode,
-			&match.Player1ID,
-			&match.Player2ID,
-			&match.WinnerID,
-			&match.Status,
-			&match.IsRated,
-			&match.RatingApplied,
-			&match.StartedAt,
-			&match.FinishedAt,
-			&match.CreatedAt,
-			&match.UpdatedAt,
-		); err != nil {
+		match, err := scanMatch(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan user matches: %w", err)
 		}
 		matches = append(matches, match)
@@ -276,21 +307,43 @@ func (r *Repository) FinishMatch(ctx context.Context, input FinishMatchInput) er
 		return ErrInvalidMatchStatus
 	}
 
-	if err := validateWinner(match, input.WinnerID); err != nil {
+	if err := validateFinishInput(match, input); err != nil {
 		return err
 	}
 
-	now := time.Now().UTC()
+	finishedAt := time.Now().UTC()
+	if input.FinishedAt != nil {
+		finishedAt = input.FinishedAt.UTC()
+	}
+
+	judgeStatus := JudgeStatusFinished
+	if input.JudgeStatus != nil {
+		judgeStatus = *input.JudgeStatus
+	}
 
 	updateMatchQuery := `
 		update matches
 		set winner_id = $2,
 			status = $3,
-			finished_at = $4,
+			result_type = $4,
+			winning_reason = $5,
+			judge_status = $6,
+			finished_at = $7,
 			updated_at = now()
 		where id = $1
 	`
-	_, err = tx.Exec(ctx, updateMatchQuery, input.MatchID, input.WinnerID, MatchStatusFinished, now)
+
+	_, err = tx.Exec(
+		ctx,
+		updateMatchQuery,
+		input.MatchID,
+		input.WinnerID,
+		MatchStatusFinished,
+		input.ResultType,
+		input.WinningReason,
+		judgeStatus,
+		finishedAt,
+	)
 	if err != nil {
 		return fmt.Errorf("update match result: %w", err)
 	}
@@ -312,32 +365,32 @@ func (r *Repository) FinishMatch(ctx context.Context, input FinishMatchInput) er
 		return nil
 	}
 
-	player1Rating, err := r.getUserRatingForUpdate(ctx, tx, match.Player1ID, match.Mode)
+	player1Rating, err := r.getUserRatingForUpdate(ctx, tx, match.Player1ID, match.RatingMode)
 	if err != nil {
 		return err
 	}
-	player2Rating, err := r.getUserRatingForUpdate(ctx, tx, match.Player2ID, match.Mode)
+	player2Rating, err := r.getUserRatingForUpdate(ctx, tx, match.Player2ID, match.RatingMode)
 	if err != nil {
 		return err
 	}
 
-	var result1, result2 float64
-	switch {
-	case input.WinnerID == nil:
-		result1 = 0.5
-		result2 = 0.5
-	case *input.WinnerID == match.Player1ID:
-		result1 = 1.0
-		result2 = 0.0
-	case *input.WinnerID == match.Player2ID:
-		result1 = 0.0
-		result2 = 1.0
-	default:
-		return ErrInvalidWinner
+	result1, result2, err := eloResultsForMatch(match, input)
+	if err != nil {
+		return err
 	}
 
-	newRating1 := calculateNewRating(player1Rating.Rating, player2Rating.Rating, player1Rating.RatedGames, result1)
-	newRating2 := calculateNewRating(player2Rating.Rating, player1Rating.Rating, player2Rating.RatedGames, result2)
+	newRating1 := calculateNewRating(
+		player1Rating.Rating,
+		player2Rating.Rating,
+		player1Rating.RatedGames,
+		result1,
+	)
+	newRating2 := calculateNewRating(
+		player2Rating.Rating,
+		player1Rating.Rating,
+		player2Rating.RatedGames,
+		result2,
+	)
 
 	if err := r.updateUserRatingAfterMatch(ctx, tx, player1Rating, newRating1, result1); err != nil {
 		return err
@@ -346,10 +399,26 @@ func (r *Repository) FinishMatch(ctx context.Context, input FinishMatchInput) er
 		return err
 	}
 
-	if err := r.insertRatingHistory(ctx, tx, player1Rating.UserID, input.MatchID, match.Mode, player1Rating.Rating, newRating1); err != nil {
+	if err := r.insertRatingHistory(
+		ctx,
+		tx,
+		player1Rating.UserID,
+		input.MatchID,
+		match.RatingMode,
+		player1Rating.Rating,
+		newRating1,
+	); err != nil {
 		return err
 	}
-	if err := r.insertRatingHistory(ctx, tx, player2Rating.UserID, input.MatchID, match.Mode, player2Rating.Rating, newRating2); err != nil {
+	if err := r.insertRatingHistory(
+		ctx,
+		tx,
+		player2Rating.UserID,
+		input.MatchID,
+		match.RatingMode,
+		player2Rating.Rating,
+		newRating2,
+	); err != nil {
 		return err
 	}
 
@@ -372,29 +441,13 @@ func (r *Repository) FinishMatch(ctx context.Context, input FinishMatchInput) er
 
 func (r *Repository) getMatchForUpdate(ctx context.Context, tx pgx.Tx, matchID uuid.UUID) (Match, error) {
 	query := `
-		select
-			id, mode, player1_id, player2_id, winner_id, status,
-			is_rated, rating_applied, started_at, finished_at, created_at, updated_at
+		select ` + matchSelectColumns + `
 		from matches
 		where id = $1
 		for update
 	`
 
-	var match Match
-	err := tx.QueryRow(ctx, query, matchID).Scan(
-		&match.ID,
-		&match.Mode,
-		&match.Player1ID,
-		&match.Player2ID,
-		&match.WinnerID,
-		&match.Status,
-		&match.IsRated,
-		&match.RatingApplied,
-		&match.StartedAt,
-		&match.FinishedAt,
-		&match.CreatedAt,
-		&match.UpdatedAt,
-	)
+	match, err := scanMatch(tx.QueryRow(ctx, query, matchID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Match{}, ErrMatchNotFound
@@ -471,7 +524,13 @@ func (r *Repository) updateUserRatingAfterMatch(ctx context.Context, tx pgx.Tx, 
 	return nil
 }
 
-func (r *Repository) insertRatingHistory(ctx context.Context, tx pgx.Tx, userID, matchID uuid.UUID, mode string, oldRating, newRating int) error {
+func (r *Repository) insertRatingHistory(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID, matchID uuid.UUID,
+	mode string,
+	oldRating, newRating int,
+) error {
 	query := `
 		insert into rating_history (
 			id, user_id, match_id, mode, old_rating, new_rating, delta, created_at
@@ -479,7 +538,9 @@ func (r *Repository) insertRatingHistory(ctx context.Context, tx pgx.Tx, userID,
 		values ($1, $2, $3, $4, $5, $6, $7, now())
 	`
 
-	_, err := tx.Exec(ctx, query,
+	_, err := tx.Exec(
+		ctx,
+		query,
 		uuid.New(),
 		userID,
 		matchID,
@@ -495,14 +556,82 @@ func (r *Repository) insertRatingHistory(ctx context.Context, tx pgx.Tx, userID,
 	return nil
 }
 
-func validateWinner(match Match, winnerID *uuid.UUID) error {
-	if winnerID == nil {
-		return nil
+type matchScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanMatch(row matchScanner) (Match, error) {
+	var match Match
+
+	err := row.Scan(
+		&match.ID,
+		&match.RatingMode,
+		&match.TaskMode,
+		&match.TaskID,
+		&match.TaskDifficultySnapshot,
+		&match.Player1ID,
+		&match.Player2ID,
+		&match.WinnerID,
+		&match.Status,
+		&match.JudgeStatus,
+		&match.ResultType,
+		&match.WinningReason,
+		&match.IsRated,
+		&match.RatingApplied,
+		&match.Player1Score,
+		&match.Player2Score,
+		&match.Player1Attempts,
+		&match.Player2Attempts,
+		&match.Player1Solved,
+		&match.Player2Solved,
+		&match.Player1SolvedAt,
+		&match.Player2SolvedAt,
+		&match.StartedAt,
+		&match.FinishedAt,
+		&match.CreatedAt,
+		&match.UpdatedAt,
+	)
+	if err != nil {
+		return Match{}, err
 	}
-	if *winnerID != match.Player1ID && *winnerID != match.Player2ID {
-		return ErrInvalidWinner
+
+	return match, nil
+}
+
+func validateFinishInput(match Match, input FinishMatchInput) error {
+	switch input.ResultType {
+	case MatchResultTypeDraw:
+		if input.WinnerID != nil {
+			return ErrInvalidWinner
+		}
+	case MatchResultTypePlayer1Win:
+		if input.WinnerID == nil || *input.WinnerID != match.Player1ID {
+			return ErrInvalidWinner
+		}
+	case MatchResultTypePlayer2Win:
+		if input.WinnerID == nil || *input.WinnerID != match.Player2ID {
+			return ErrInvalidWinner
+		}
+	case MatchResultTypeCancelled:
+		return ErrInvalidMatchStatus
+	default:
+		return ErrInvalidMatchStatus
 	}
+
 	return nil
+}
+
+func eloResultsForMatch(match Match, input FinishMatchInput) (float64, float64, error) {
+	switch input.ResultType {
+	case MatchResultTypeDraw:
+		return 0.5, 0.5, nil
+	case MatchResultTypePlayer1Win:
+		return 1.0, 0.0, nil
+	case MatchResultTypePlayer2Win:
+		return 0.0, 1.0, nil
+	default:
+		return 0, 0, ErrInvalidMatchStatus
+	}
 }
 
 func expectedScore(playerRating, opponentRating int) float64 {

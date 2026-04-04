@@ -1,8 +1,9 @@
 package matches
 
 import (
+	"context"
 	"time"
-
+	
 	"github.com/google/uuid"
 )
 
@@ -15,26 +16,87 @@ const (
 	MatchStatusCancelled MatchStatus = "cancelled"
 )
 
+type TaskMode string
+
+const (
+	TaskModeNormal TaskMode = "normal"
+	TaskModeHard   TaskMode = "hard"
+)
+
+type TaskDifficulty string
+
+const (
+	TaskDifficultyEasy   TaskDifficulty = "easy"
+	TaskDifficultyMedium TaskDifficulty = "medium"
+	TaskDifficultyHard   TaskDifficulty = "hard"
+)
+
+type JudgeStatus string
+
+const (
+	JudgeStatusNotStarted JudgeStatus = "not_started"
+	JudgeStatusReady      JudgeStatus = "ready"
+	JudgeStatusRunning    JudgeStatus = "running"
+	JudgeStatusFinished   JudgeStatus = "finished"
+	JudgeStatusFailed     JudgeStatus = "failed"
+)
+
+type MatchResultType string
+
+const (
+	MatchResultTypePlayer1Win MatchResultType = "player1_win"
+	MatchResultTypePlayer2Win MatchResultType = "player2_win"
+	MatchResultTypeDraw       MatchResultType = "draw"
+	MatchResultTypeCancelled  MatchResultType = "cancelled"
+)
+
+type WinningReason string
+
+const (
+	WinningReasonAcceptedFaster    WinningReason = "accepted_faster"
+	WinningReasonAcceptedMoreTests WinningReason = "accepted_more_tests"
+	WinningReasonOpponentFailed    WinningReason = "opponent_failed"
+	WinningReasonDraw              WinningReason = "draw"
+	WinningReasonCancelled         WinningReason = "cancelled"
+)
+
 type Match struct {
-	ID            uuid.UUID   `json:"id"`
-	Mode          string      `json:"mode"`
-	Player1ID     uuid.UUID   `json:"player1_id"`
-	Player2ID     uuid.UUID   `json:"player2_id"`
-	WinnerID      *uuid.UUID  `json:"winner_id,omitempty"`
-	Status        MatchStatus `json:"status"`
-	IsRated       bool        `json:"is_rated"`
-	RatingApplied bool        `json:"rating_applied"`
-	StartedAt     *time.Time  `json:"started_at,omitempty"`
-	FinishedAt    *time.Time  `json:"finished_at,omitempty"`
-	CreatedAt     time.Time   `json:"created_at"`
-	UpdatedAt     time.Time   `json:"updated_at"`
+	ID                     uuid.UUID        `json:"id"`
+	RatingMode             string           `json:"rating_mode"`
+	TaskMode               TaskMode         `json:"task_mode"`
+	TaskID                 *uuid.UUID       `json:"task_id,omitempty"`
+	TaskDifficultySnapshot *TaskDifficulty  `json:"task_difficulty_snapshot,omitempty"`
+	Player1ID              uuid.UUID        `json:"player1_id"`
+	Player2ID              uuid.UUID        `json:"player2_id"`
+	WinnerID               *uuid.UUID       `json:"winner_id,omitempty"`
+	Status                 MatchStatus      `json:"status"`
+	JudgeStatus            JudgeStatus      `json:"judge_status"`
+	ResultType             *MatchResultType `json:"result_type,omitempty"`
+	WinningReason          *WinningReason   `json:"winning_reason,omitempty"`
+	IsRated                bool             `json:"is_rated"`
+	RatingApplied          bool             `json:"rating_applied"`
+
+	Player1Score    int        `json:"player1_score"`
+	Player2Score    int        `json:"player2_score"`
+	Player1Attempts int        `json:"player1_attempts"`
+	Player2Attempts int        `json:"player2_attempts"`
+	Player1Solved   bool       `json:"player1_solved"`
+	Player2Solved   bool       `json:"player2_solved"`
+	Player1SolvedAt *time.Time `json:"player1_solved_at,omitempty"`
+	Player2SolvedAt *time.Time `json:"player2_solved_at,omitempty"`
+
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 type CreateMatchInput struct {
-	Player1ID uuid.UUID `json:"player1_id"`
-	Player2ID uuid.UUID `json:"player2_id"`
-	Mode      string    `json:"mode"`
-	IsRated   bool      `json:"is_rated"`
+	Player1ID  uuid.UUID `json:"player1_id"`
+	Player2ID  uuid.UUID `json:"player2_id"`
+	RatingMode string    `json:"rating_mode"`
+	TaskMode   TaskMode  `json:"task_mode"`
+	IsRated    bool      `json:"is_rated"`
 }
 
 type StartMatchInput struct {
@@ -42,8 +104,12 @@ type StartMatchInput struct {
 }
 
 type FinishMatchInput struct {
-	MatchID  uuid.UUID  `json:"match_id"`
-	WinnerID *uuid.UUID `json:"winner_id"`
+	MatchID       uuid.UUID        `json:"match_id"`
+	WinnerID      *uuid.UUID       `json:"winner_id,omitempty"`
+	ResultType    MatchResultType  `json:"result_type"`
+	WinningReason WinningReason    `json:"winning_reason"`
+	FinishedAt    *time.Time       `json:"finished_at,omitempty"`
+	JudgeStatus   *JudgeStatus     `json:"judge_status,omitempty"`
 }
 
 type CancelMatchInput struct {
@@ -57,24 +123,33 @@ type ListUserMatchesInput struct {
 }
 
 type UserRating struct {
-	UserID      uuid.UUID
-	Mode        string
-	Rating      int
-	RatedGames  int
-	Wins        int
-	Losses      int
-	Draws       int
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	UserID     uuid.UUID `json:"user_id"`
+	Mode       string    `json:"mode"`
+	Rating     int       `json:"rating"`
+	RatedGames int       `json:"rated_games"`
+	Wins       int       `json:"wins"`
+	Losses     int       `json:"losses"`
+	Draws      int       `json:"draws"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type RatingHistoryEntry struct {
-	ID        uuid.UUID
-	UserID    uuid.UUID
-	MatchID   uuid.UUID
-	Mode      string
-	OldRating int
-	NewRating int
-	Delta     int
-	CreatedAt time.Time
+	ID        uuid.UUID `json:"id"`
+	UserID    uuid.UUID `json:"user_id"`
+	MatchID   uuid.UUID `json:"match_id"`
+	Mode      string    `json:"mode"`
+	OldRating int       `json:"old_rating"`
+	NewRating int       `json:"new_rating"`
+	Delta     int       `json:"delta"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type TaskSelector interface {
+	SelectForMatch(ctx context.Context, mode TaskMode) (SelectedTask, error)
+}
+
+type SelectedTask struct {
+	TaskID     uuid.UUID
+	Difficulty TaskDifficulty
 }

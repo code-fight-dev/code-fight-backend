@@ -17,11 +17,15 @@ type RepositoryInterface interface {
 }
 
 type Service struct {
-	repo RepositoryInterface
+	repo         RepositoryInterface
+	taskSelector TaskSelector
 }
 
-func NewService(repo RepositoryInterface) *Service {
-	return &Service{repo: repo}
+func NewService(repo RepositoryInterface, taskSelector TaskSelector) *Service {
+	return &Service{
+		repo:         repo,
+		taskSelector: taskSelector,
+	}
 }
 
 func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Match, error) {
@@ -31,18 +35,40 @@ func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Matc
 	if input.Player1ID == input.Player2ID {
 		return Match{}, ErrSamePlayer
 	}
-	if input.Mode == "" {
-		input.Mode = "global"
+
+	if input.RatingMode == "" {
+		input.RatingMode = "global"
+	}
+
+	if s.taskSelector == nil {
+	return Match{}, fmt.Errorf("create match: task selector is not configured")
+	}
+	
+	switch input.TaskMode {
+	case "":
+		input.TaskMode = TaskModeNormal
+	case TaskModeNormal, TaskModeHard:
+	default:
+		return Match{}, ErrInvalidTaskMode
+	}
+
+	selected, err := s.taskSelector.SelectForMatch(ctx, input.TaskMode)
+	if err != nil {
+		return Match{}, err
 	}
 
 	match := Match{
-		ID:            uuid.New(),
-		Mode:          input.Mode,
-		Player1ID:     input.Player1ID,
-		Player2ID:     input.Player2ID,
-		Status:        MatchStatusPending,
-		IsRated:       input.IsRated,
-		RatingApplied: false,
+		ID:                     uuid.New(),
+		RatingMode:             input.RatingMode,
+		TaskMode:               input.TaskMode,
+		TaskID:                 &selected.TaskID,
+		TaskDifficultySnapshot: &selected.Difficulty,
+		Player1ID:              input.Player1ID,
+		Player2ID:              input.Player2ID,
+		Status:                 MatchStatusPending,
+		JudgeStatus:            JudgeStatusNotStarted,
+		IsRated:                input.IsRated,
+		RatingApplied:          false,
 	}
 
 	return s.repo.CreateMatch(ctx, match)
@@ -53,12 +79,59 @@ func (s *Service) StartMatch(ctx context.Context, input StartMatchInput) (Match,
 		return Match{}, fmt.Errorf("start match: empty match id")
 	}
 
+	match, err := s.repo.GetMatch(ctx, input.MatchID)
+	if err != nil {
+		return Match{}, err
+	}
+
+	if match.TaskID == nil || match.TaskDifficultySnapshot == nil {
+		return Match{}, ErrTaskNotAssigned
+	}
+
 	return s.repo.StartMatch(ctx, input.MatchID)
 }
 
 func (s *Service) FinishMatch(ctx context.Context, input FinishMatchInput) error {
 	if input.MatchID == uuid.Nil {
 		return fmt.Errorf("finish match: empty match id")
+	}
+
+	switch input.ResultType {
+	case MatchResultTypePlayer1Win, MatchResultTypePlayer2Win, MatchResultTypeDraw:
+	default:
+		return ErrInvalidResultType
+	}
+
+	switch input.WinningReason {
+	case WinningReasonAcceptedFaster,
+		WinningReasonAcceptedMoreTests,
+		WinningReasonOpponentFailed,
+		WinningReasonDraw:
+	default:
+		return ErrInvalidWinningReason
+	}
+
+	switch input.ResultType {
+	case MatchResultTypeDraw:
+		if input.WinnerID != nil {
+			return ErrInvalidWinner
+		}
+	case MatchResultTypePlayer1Win, MatchResultTypePlayer2Win:
+		if input.WinnerID == nil {
+			return ErrInvalidWinner
+		}
+	}
+
+	if input.JudgeStatus != nil {
+		switch *input.JudgeStatus {
+		case JudgeStatusNotStarted,
+			JudgeStatusReady,
+			JudgeStatusRunning,
+			JudgeStatusFinished,
+			JudgeStatusFailed:
+		default:
+			return ErrInvalidJudgeStatus
+		}
 	}
 
 	return s.repo.FinishMatch(ctx, input)

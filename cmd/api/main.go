@@ -58,8 +58,9 @@ func main() {
 	usersRepository := users.NewRepository(db)
 	usersService := users.NewService(usersRepository)
 	usersHandler := users.NewHandler(usersService, authService, cfg.SessionCookieName)
-	matchesRepository := matches.NewRepository(db)
-	matchesService := matches.NewService(matchesRepository)
+	matchesRepo := matches.NewRepository(db)
+	taskSelector := matches.NewDBTaskSelector(db)
+	matchesService := matches.NewService(matchesRepo, taskSelector)
 	matchesHandler := matches.NewHandler(matchesService)
 
 	cleanupCtx, stopSessionCleanup := context.WithCancel(context.Background())
