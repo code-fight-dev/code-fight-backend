@@ -153,3 +153,12 @@ type SelectedTask struct {
 	TaskID     uuid.UUID
 	Difficulty TaskDifficulty
 }
+
+type ApplySubmissionProgressInput struct {
+	MatchID      uuid.UUID
+	UserID       uuid.UUID
+	Score        int
+	IsAccepted   bool
+	SolvedAt     *time.Time
+	JudgeStatus  *string
+}

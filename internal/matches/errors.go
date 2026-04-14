@@ -20,4 +20,5 @@ var (
 	ErrInvalidJudgeStatus   = errors.New("invalid judge status")
 	ErrTaskNotAssigned      = errors.New("task is not assigned")
 	ErrNoTasksAvailable     = errors.New("no tasks available")
+	ErrSubmissionUserNotInMatch = errors.New("submission user is not a participant of this match")
 )

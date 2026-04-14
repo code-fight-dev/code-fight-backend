@@ -6,6 +6,7 @@ import (
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/matches"
+	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/users"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,6 +20,7 @@ func New(
 	authHandler *auth.Handler,
 	usersHandler *users.Handler,
 	matchesHandler *matches.Handler,
+	submissionsHandler *submissions.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: jsonErrorHandler,
@@ -28,7 +30,7 @@ func New(
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     strings.Join(cfg.AllowedOrigins, ","),
-		AllowHeaders:     "Origin, Content-Type, Accept",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Judge-Token",
 		AllowMethods:     "GET,POST,PATCH,HEAD,OPTIONS",
 		AllowCredentials: true,
 	}))
@@ -49,6 +51,14 @@ func New(
 		return group
 	}
 
+	internalGroup := func(path string, middlewares ...fiber.Handler) fiber.Router {
+		group := app.Group(path)
+		for _, middleware := range middlewares {
+			group.Use(middleware)
+		}
+		return group
+	}
+
 	authGroup := protectedGroup("/auth", newAuthLimiter())
 	authHandler.RegisterRoutes(authGroup)
 
@@ -57,6 +67,10 @@ func New(
 
 	matchesGroup := protectedGroup("/matches")
 	matchesHandler.RegisterRoutes(matchesGroup)
+
+	submissionsAPIGroup := protectedGroup("/api")
+	submissionsInternalGroup := internalGroup("/internal")
+	submissionsHandler.RegisterRoutes(submissionsAPIGroup, submissionsInternalGroup)
 
 	return app
 }

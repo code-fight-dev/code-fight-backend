@@ -2,6 +2,7 @@ package matches
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -14,17 +15,25 @@ type RepositoryInterface interface {
 	FinishMatch(ctx context.Context, input FinishMatchInput) error
 	CancelMatch(ctx context.Context, matchID uuid.UUID) error
 	ListUserMatches(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Match, error)
+
+	ApplySubmissionProgress(ctx context.Context, input ApplySubmissionProgressInput) error
 }
 
 type Service struct {
-	repo         RepositoryInterface
-	taskSelector TaskSelector
+	repo             RepositoryInterface
+	taskSelector     TaskSelector
+	submissionReader SubmissionReader
 }
 
-func NewService(repo RepositoryInterface, taskSelector TaskSelector) *Service {
+func NewService(
+	repo RepositoryInterface,
+	taskSelector TaskSelector,
+	submissionReader SubmissionReader,
+) *Service {
 	return &Service{
-		repo:         repo,
-		taskSelector: taskSelector,
+		repo:             repo,
+		taskSelector:     taskSelector,
+		submissionReader: submissionReader,
 	}
 }
 
@@ -168,4 +177,107 @@ func (s *Service) ListUserMatches(ctx context.Context, input ListUserMatchesInpu
 	}
 
 	return s.repo.ListUserMatches(ctx, input.UserID, input.Limit, input.Offset)
+}
+
+func (s *Service) ApplySubmissionResult(ctx context.Context, submissionID uuid.UUID) error {
+	if submissionID == uuid.Nil {
+		return fmt.Errorf("apply submission result: empty submission id")
+	}
+	if s.submissionReader == nil {
+		return fmt.Errorf("apply submission result: submission reader is not configured")
+	}
+
+	submission, err := s.submissionReader.GetSubmissionForMatchProcessing(ctx, submissionID)
+	if err != nil {
+		return err
+	}
+
+	if submission.MatchID == nil || *submission.MatchID == uuid.Nil {
+		return nil
+	}
+
+	match, err := s.repo.GetMatch(ctx, *submission.MatchID)
+	if err != nil {
+		return err
+	}
+
+	if match.Status == MatchStatusFinished || match.Status == MatchStatusCancelled {
+		return nil
+	}
+
+	isPlayer1 := submission.UserID == match.Player1ID
+	isPlayer2 := submission.UserID == match.Player2ID
+
+	if !isPlayer1 && !isPlayer2 {
+		return ErrSubmissionUserNotInMatch
+	}
+
+	judgeStatus := JudgeStatusRunning
+	if submission.Status == "finished" {
+		judgeStatus = JudgeStatusFinished
+	}
+	if submission.Status == "failed" {
+		judgeStatus = JudgeStatusFailed
+	}
+
+	progressJudgeStatus := string(judgeStatus)
+	isAccepted := submission.Verdict != nil && *submission.Verdict == "accepted"
+
+	err = s.repo.ApplySubmissionProgress(ctx, ApplySubmissionProgressInput{
+		MatchID:     match.ID,
+		UserID:      submission.UserID,
+		Score:       submission.Score,
+		IsAccepted:  isAccepted,
+		SolvedAt:    submission.FinishedAt,
+		JudgeStatus: &progressJudgeStatus,
+	})
+	if err != nil {
+		return err
+	}
+
+	if !isAccepted {
+		return nil
+	}
+
+	updatedMatch, err := s.repo.GetMatch(ctx, match.ID)
+	if err != nil {
+		return err
+	}
+
+	if updatedMatch.Status == MatchStatusFinished || updatedMatch.Status == MatchStatusCancelled {
+		return nil
+	}
+
+	winningReason := WinningReasonAcceptedFaster
+
+	var resultType MatchResultType
+	winnerID := submission.UserID
+	finalJudgeStatus := JudgeStatusFinished
+
+	switch submission.UserID {
+	case updatedMatch.Player1ID:
+		resultType = MatchResultTypePlayer1Win
+	case updatedMatch.Player2ID:
+		resultType = MatchResultTypePlayer2Win
+	default:
+		return ErrSubmissionUserNotInMatch
+	}
+
+	err = s.repo.FinishMatch(ctx, FinishMatchInput{
+		MatchID:       updatedMatch.ID,
+		WinnerID:      &winnerID,
+		ResultType:    resultType,
+		WinningReason: winningReason,
+		JudgeStatus:   &finalJudgeStatus,
+	})
+	if err != nil {
+		if errors.Is(err, ErrMatchAlreadyFinished) ||
+			errors.Is(err, ErrRatingAlreadyApplied) ||
+			errors.Is(err, ErrMatchCancelled) {
+			return nil
+		}
+		return err
+	}
+
+	return nil
 }

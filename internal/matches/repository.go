@@ -656,3 +656,77 @@ func isForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
+
+func (r *Repository) ApplySubmissionProgress(ctx context.Context, input ApplySubmissionProgressInput) error {
+	if input.MatchID == uuid.Nil {
+		return fmt.Errorf("apply submission progress: empty match id")
+	}
+	if input.UserID == uuid.Nil {
+		return fmt.Errorf("apply submission progress: empty user id")
+	}
+
+	match, err := r.GetMatch(ctx, input.MatchID)
+	if err != nil {
+		return err
+	}
+
+	if match.Status == MatchStatusFinished || match.Status == MatchStatusCancelled {
+		return nil
+	}
+
+	if input.UserID == match.Player1ID {
+		const q = `
+update matches
+set
+	player1_attempts = player1_attempts + 1,
+	player1_score = greatest(player1_score, $2),
+	player1_solved = case
+		when $3 then true
+		else player1_solved
+	end,
+	player1_solved_at = case
+		when $3 and player1_solved_at is null then $4
+		else player1_solved_at
+	end,
+	judge_status = coalesce($5, judge_status)
+where id = $1
+`
+		_, err := r.db.Exec(ctx, q,
+			input.MatchID,
+			input.Score,
+			input.IsAccepted,
+			input.SolvedAt,
+			input.JudgeStatus,
+		)
+		return err
+	}
+
+	if input.UserID == match.Player2ID {
+		const q = `
+update matches
+set
+	player2_attempts = player2_attempts + 1,
+	player2_score = greatest(player2_score, $2),
+	player2_solved = case
+		when $3 then true
+		else player2_solved
+	end,
+	player2_solved_at = case
+		when $3 and player2_solved_at is null then $4
+		else player2_solved_at
+	end,
+	judge_status = coalesce($5, judge_status)
+where id = $1
+`
+		_, err := r.db.Exec(ctx, q,
+			input.MatchID,
+			input.Score,
+			input.IsAccepted,
+			input.SolvedAt,
+			input.JudgeStatus,
+		)
+		return err
+	}
+
+	return ErrSubmissionUserNotInMatch
+}

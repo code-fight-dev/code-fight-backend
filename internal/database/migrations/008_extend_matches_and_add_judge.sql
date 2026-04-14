@@ -181,14 +181,17 @@ create index if not exists task_test_cases_task_id_kind_idx on task_test_cases (
 
 create table if not exists submissions (
     id uuid primary key,
-    match_id uuid not null references matches(id) on delete cascade,
-    task_id uuid not null references tasks(id) on delete cascade,
-    user_id uuid not null references users(id) on delete cascade,
+    match_id uuid references matches(id),
+    task_id uuid not null references tasks(id),
+    user_id uuid not null references users(id),
     language text not null,
     language_version text not null,
     source_code text not null,
     status text not null default 'queued',
     verdict text,
+    judge_submission_id text,
+    judge_status text,
+    error_message text,
     passed_tests integer not null default 0,
     total_tests integer not null default 0,
     compile_time_ms integer,
@@ -204,7 +207,7 @@ create table if not exists submissions (
     finished_at timestamptz,
     updated_at timestamptz not null default now(),
     constraint submissions_status_check check (
-        status in ('queued', 'running', 'finished', 'failed')
+        status in ('queued', 'sent_to_judge', 'running', 'finished', 'failed')
     ),
     constraint submissions_verdict_check check (
         verdict is null or verdict in (
@@ -218,6 +221,15 @@ create table if not exists submissions (
             'system_error'
         )
     ),
+    constraint submissions_judge_status_check check (
+        judge_status is null or judge_status in (
+            'pending',
+            'queued',
+            'running',
+            'finished',
+            'failed'
+        )
+    ),
     constraint submissions_passed_tests_check check (passed_tests >= 0),
     constraint submissions_total_tests_check check (total_tests >= 0),
     constraint submissions_score_check check (score >= 0)
@@ -228,14 +240,17 @@ create index if not exists submissions_task_id_idx on submissions (task_id);
 create index if not exists submissions_user_id_idx on submissions (user_id);
 create index if not exists submissions_status_idx on submissions (status);
 create index if not exists submissions_verdict_idx on submissions (verdict);
+create index if not exists submissions_judge_status_idx on submissions (judge_status);
+create unique index if not exists submissions_judge_submission_id_uidx
+    on submissions (judge_submission_id)
+    where judge_submission_id is not null;
 create index if not exists submissions_match_user_created_at_idx
     on submissions (match_id, user_id, created_at desc);
-
 
 create table if not exists submission_test_results (
     id uuid primary key,
     submission_id uuid not null references submissions(id) on delete cascade,
-    test_case_id uuid not null references task_test_cases(id) on delete cascade,
+    test_case_id uuid not null references task_test_cases(id),
     status text not null,
     time_ms integer,
     memory_kb integer,
@@ -252,7 +267,9 @@ create table if not exists submission_test_results (
             'skipped',
             'system_error'
         )
-    )
+    ),
+    constraint submission_test_results_submission_test_unique
+        unique (submission_id, test_case_id)
 );
 
 create index if not exists submission_test_results_submission_id_idx
