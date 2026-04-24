@@ -29,6 +29,22 @@ type SubmitRequest struct {
 	SourceCode      string `json:"source_code"`
 	CallbackURL     string `json:"callback_url"`
 	CallbackToken   string `json:"callback_token"`
+
+	Limits SubmitLimits `json:"limits"`
+	Tests  []SubmitTest `json:"tests"`
+}
+
+type SubmitLimits struct {
+	TimeMS   int `json:"time_ms"`
+	MemoryMB int `json:"memory_mb"`
+	OutputKB int `json:"output_kb"`
+}
+
+type SubmitTest struct {
+	ID             int    `json:"id"`
+	Input          string `json:"input"`
+	ExpectedOutput string `json:"expected_output"`
+	Points         int    `json:"points"`
 }
 
 type SubmitResponse struct {
