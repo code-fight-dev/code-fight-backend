@@ -26,10 +26,11 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 }
 
 type createMatchRequest struct {
-	Player1ID string `json:"player1_id"`
-	Player2ID string `json:"player2_id"`
-	Mode      string `json:"mode"`
-	IsRated   bool   `json:"is_rated"`
+	Player1ID  string `json:"player1_id"`
+	Player2ID  string `json:"player2_id"`
+	RatingMode string `json:"rating_mode"`
+	TaskMode   string `json:"task_mode"`
+	IsRated    bool   `json:"is_rated"`
 }
 
 func (h *Handler) CreateMatch(c *fiber.Ctx) error {
@@ -42,16 +43,27 @@ func (h *Handler) CreateMatch(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid player1_id"})
 	}
+
 	player2ID, err := uuid.Parse(req.Player2ID)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid player2_id"})
 	}
 
+	taskMode := TaskMode(req.TaskMode)
+	switch taskMode {
+	case "":
+		taskMode = TaskModeNormal
+	case TaskModeNormal, TaskModeHard:
+	default:
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid task_mode"})
+	}
+
 	match, err := h.service.CreateMatch(c.UserContext(), CreateMatchInput{
-		Player1ID: player1ID,
-		Player2ID: player2ID,
-		Mode:      req.Mode,
-		IsRated:   req.IsRated,
+		Player1ID:  player1ID,
+		Player2ID:  player2ID,
+		RatingMode: req.RatingMode,
+		TaskMode:   taskMode,
+		IsRated:    req.IsRated,
 	})
 	if err != nil {
 		return writeMatchError(c, err)
@@ -77,7 +89,10 @@ func (h *Handler) StartMatch(c *fiber.Ctx) error {
 }
 
 type finishMatchRequest struct {
-	WinnerID *string `json:"winner_id"`
+	WinnerID      *string `json:"winner_id"`
+	ResultType    string  `json:"result_type"`
+	WinningReason string  `json:"winning_reason"`
+	JudgeStatus   *string `json:"judge_status,omitempty"`
 }
 
 func (h *Handler) FinishMatch(c *fiber.Ctx) error {
@@ -100,9 +115,40 @@ func (h *Handler) FinishMatch(c *fiber.Ctx) error {
 		winnerID = &parsed
 	}
 
+	resultType := MatchResultType(req.ResultType)
+	switch resultType {
+	case MatchResultTypePlayer1Win, MatchResultTypePlayer2Win, MatchResultTypeDraw:
+	default:
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid result_type"})
+	}
+
+	winningReason := WinningReason(req.WinningReason)
+	switch winningReason {
+	case WinningReasonAcceptedFaster,
+		WinningReasonAcceptedMoreTests,
+		WinningReasonOpponentFailed,
+		WinningReasonDraw:
+	default:
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid winning_reason"})
+	}
+
+	var judgeStatus *JudgeStatus
+	if req.JudgeStatus != nil && *req.JudgeStatus != "" {
+		parsed := JudgeStatus(*req.JudgeStatus)
+		switch parsed {
+		case JudgeStatusNotStarted, JudgeStatusReady, JudgeStatusRunning, JudgeStatusFinished, JudgeStatusFailed:
+			judgeStatus = &parsed
+		default:
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid judge_status"})
+		}
+	}
+
 	err = h.service.FinishMatch(c.UserContext(), FinishMatchInput{
-		MatchID:  matchID,
-		WinnerID: winnerID,
+		MatchID:       matchID,
+		WinnerID:      winnerID,
+		ResultType:    resultType,
+		WinningReason: winningReason,
+		JudgeStatus:   judgeStatus,
 	})
 	if err != nil {
 		return writeMatchError(c, err)
@@ -157,12 +203,20 @@ func (h *Handler) ListUserMatches(c *fiber.Ctx) error {
 		}
 		limit = v
 	}
+
 	if raw := c.Query("offset"); raw != "" {
 		v, err := strconv.Atoi(raw)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid offset"})
 		}
 		offset = v
+	}
+
+	if limit <= 0 || limit > 100 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "limit must be between 1 and 100"})
+	}
+	if offset < 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "offset must be >= 0"})
 	}
 
 	items, err := h.service.ListUserMatches(c.UserContext(), ListUserMatchesInput{
@@ -175,8 +229,8 @@ func (h *Handler) ListUserMatches(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"items": items,
-		"limit": limit,
+		"items":  items,
+		"limit":  limit,
 		"offset": offset,
 	})
 }
@@ -185,18 +239,28 @@ func writeMatchError(c *fiber.Ctx, err error) error {
 	switch {
 	case errors.Is(err, ErrMatchNotFound):
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
+
 	case errors.Is(err, ErrSamePlayer),
 		errors.Is(err, ErrInvalidWinner),
-		errors.Is(err, ErrInvalidPagination):
+		errors.Is(err, ErrInvalidPagination),
+		errors.Is(err, ErrInvalidTaskMode),
+		errors.Is(err, ErrInvalidResultType),
+		errors.Is(err, ErrInvalidWinningReason),
+		errors.Is(err, ErrInvalidJudgeStatus):
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
-	case errors.Is(err, ErrMatchAlreadyStarted),
+
+	case errors.Is(err, ErrTaskNotAssigned),
+		errors.Is(err, ErrMatchAlreadyStarted),
 		errors.Is(err, ErrMatchAlreadyFinished),
 		errors.Is(err, ErrMatchCancelled),
 		errors.Is(err, ErrRatingAlreadyApplied),
 		errors.Is(err, ErrInvalidMatchStatus):
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": err.Error()})
-	case errors.Is(err, ErrRatingNotFound):
+
+	case errors.Is(err, ErrRatingNotFound),
+		errors.Is(err, ErrNoTasksAvailable):
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": err.Error()})
+
 	default:
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal server error"})
 	}

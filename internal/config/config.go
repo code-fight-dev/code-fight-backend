@@ -18,6 +18,10 @@ const (
 	defaultBackendBaseURL         = "http://localhost:8080"
 	defaultOAuthStateCookie       = "codefight_oauth_state"
 	defaultOAuthStateTTL          = "10m"
+
+	defaultJudgeBaseURL         = "http://localhost:8090"
+	defaultJudgeTimeout         = "10s"
+	defaultMaxSourceCodeBytes   = 65536
 )
 
 type Config struct {
@@ -37,11 +41,18 @@ type Config struct {
 	GitHubSecret           string
 	GoogleClientID         string
 	GoogleSecret           string
+
+	JudgeBaseURL         string
+	JudgeCallbackURL     string
+	JudgeCallbackToken   string
+	JudgeTimeout         time.Duration
+	MaxSourceCodeBytes   int
 }
 
 func Load() (Config, error) {
 	appEnv := valueOrDefault("APP_ENV", "dev")
 	httpPort := valueOrDefault("HTTP_PORT", defaultHTTPPort)
+
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
@@ -67,13 +78,29 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("parse SESSION_COOKIE_SECURE: %w", err)
 	}
 
+	judgeTimeout, err := time.ParseDuration(valueOrDefault("JUDGE_TIMEOUT", defaultJudgeTimeout))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse JUDGE_TIMEOUT: %w", err)
+	}
+
+	maxSourceCodeBytes, err := parseIntWithDefault("MAX_SOURCE_CODE_BYTES", defaultMaxSourceCodeBytes)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse MAX_SOURCE_CODE_BYTES: %w", err)
+	}
+	if maxSourceCodeBytes <= 0 {
+		return Config{}, fmt.Errorf("MAX_SOURCE_CODE_BYTES must be > 0")
+	}
+
+	backendBaseURL := normalizeBaseURL(valueOrDefault("BACKEND_PUBLIC_URL", defaultBackendBaseURL))
+	judgeCallbackURL := normalizeBaseURL(valueOrDefault("JUDGE_CALLBACK_URL", backendBaseURL+"/internal/judge/callback"))
+
 	return Config{
 		AppEnv:                 appEnv,
 		HTTPPort:               httpPort,
 		DatabaseURL:            databaseURL,
 		AllowedOrigins:         splitCSV(valueOrDefault("ALLOWED_ORIGINS", defaultAllowedOrigins)),
 		FrontendBaseURL:        normalizeBaseURL(valueOrDefault("FRONTEND_PUBLIC_URL", defaultFrontendBaseURL)),
-		BackendBaseURL:         normalizeBaseURL(valueOrDefault("BACKEND_PUBLIC_URL", defaultBackendBaseURL)),
+		BackendBaseURL:         backendBaseURL,
 		SessionCookieName:      valueOrDefault("SESSION_COOKIE_NAME", defaultSessionCookieName),
 		SessionTTL:             sessionTTL,
 		SessionCleanupInterval: sessionCleanupInterval,
@@ -84,6 +111,12 @@ func Load() (Config, error) {
 		GitHubSecret:           strings.TrimSpace(os.Getenv("GITHUB_CLIENT_SECRET")),
 		GoogleClientID:         strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
 		GoogleSecret:           strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET")),
+
+		JudgeBaseURL:       normalizeBaseURL(valueOrDefault("JUDGE_BASE_URL", defaultJudgeBaseURL)),
+		JudgeCallbackURL:   judgeCallbackURL,
+		JudgeCallbackToken: strings.TrimSpace(os.Getenv("JUDGE_CALLBACK_TOKEN")),
+		JudgeTimeout:       judgeTimeout,
+		MaxSourceCodeBytes: maxSourceCodeBytes,
 	}, nil
 }
 
@@ -129,6 +162,20 @@ func parseBoolWithDefault(key string, fallback bool) (bool, error) {
 	value, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, err
+	}
+
+	return value, nil
+}
+
+func parseIntWithDefault(key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
 	}
 
 	return value, nil

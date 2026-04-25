@@ -10,7 +10,9 @@ import (
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/database"
 	httpserver "code-fight-backend/internal/http"
+	"code-fight-backend/internal/judge"
 	"code-fight-backend/internal/matches"
+	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/users"
 )
 
@@ -55,12 +57,41 @@ func main() {
 		cfg.OAuthStateTTL,
 		cfg.SessionSecure,
 	)
+
 	usersRepository := users.NewRepository(db)
 	usersService := users.NewService(usersRepository)
 	usersHandler := users.NewHandler(usersService, authService, cfg.SessionCookieName)
-	matchesRepository := matches.NewRepository(db)
-	matchesService := matches.NewService(matchesRepository)
+
+	judgeHTTPClient := judge.NewHTTPClient(cfg.JudgeBaseURL, cfg.JudgeTimeout)
+
+	matchesRepo := matches.NewRepository(db)
+	taskSelector := matches.NewDBTaskSelector(db)
+
+	submissionsRepo := submissions.NewPGRepository(db)
+	submissionsTaskRepo := submissions.NewPGTaskRepository(db)
+	submissionsMatchReader := submissions.NewMatchReader(submissionsRepo)
+
+	matchesService := matches.NewService(
+		matchesRepo,
+		taskSelector,
+		submissionsMatchReader,
+	)
 	matchesHandler := matches.NewHandler(matchesService)
+
+	submissionsService := submissions.NewService(
+		submissionsRepo,
+		submissionsTaskRepo,
+		matchesRepo,
+		judgeHTTPClient,
+		matchesService,
+		cfg.JudgeCallbackURL,
+		cfg.JudgeCallbackToken,
+		cfg.MaxSourceCodeBytes,
+	)
+	submissionsHandler := submissions.NewHandler(
+		submissionsService,
+		cfg.JudgeCallbackToken,
+	)
 
 	cleanupCtx, stopSessionCleanup := context.WithCancel(context.Background())
 	defer stopSessionCleanup()
@@ -69,7 +100,13 @@ func main() {
 		go startSessionCleanupLoop(cleanupCtx, logger, authService, cfg.SessionCleanupInterval)
 	}
 
-	app := httpserver.New(cfg, authHandler, usersHandler, matchesHandler)
+	app := httpserver.New(
+		cfg,
+		authHandler,
+		usersHandler,
+		matchesHandler,
+		submissionsHandler,
+	)
 
 	logger.Info("starting api", "addr", cfg.ListenAddr(), "app_env", cfg.AppEnv)
 

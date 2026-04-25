@@ -1,0 +1,13 @@
+FROM golang:1.24 AS builder
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /mockjudge ./cmd/mockjudge
+
+FROM gcr.io/distroless/base-debian12
+COPY --from=builder /mockjudge /mockjudge
+EXPOSE 8090
+ENTRYPOINT ["/mockjudge"]
