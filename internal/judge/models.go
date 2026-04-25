@@ -41,7 +41,7 @@ type SubmitLimits struct {
 }
 
 type SubmitTest struct {
-	ID             int    `json:"id"`
+	ID             string `json:"id"`
 	Input          string `json:"input"`
 	ExpectedOutput string `json:"expected_output"`
 	Points         int    `json:"points"`

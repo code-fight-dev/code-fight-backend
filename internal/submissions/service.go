@@ -314,7 +314,7 @@ func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 		}
 
 		judgeTests = append(judgeTests, judge.SubmitTest{
-			ID:             testID,
+			ID:             test.ID,
 			Input:          test.InputBlobRef,
 			ExpectedOutput: test.ExpectedBlobRef,
 			Points:         points,
