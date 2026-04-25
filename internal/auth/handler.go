@@ -276,3 +276,20 @@ func mapServiceError(err error) error {
 		return err
 	}
 }
+
+func (h *Handler) RequireAuth(c *fiber.Ctx) error {
+	token := c.Cookies(h.cookieName)
+	if strings.TrimSpace(token) == "" {
+		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
+	}
+
+	user, err := h.service.CurrentUser(c.UserContext(), token)
+	if err != nil {
+		return mapServiceError(err)
+	}
+
+	c.Locals("user_id", user.ID)
+	c.Locals("user", user)
+
+	return c.Next()
+}

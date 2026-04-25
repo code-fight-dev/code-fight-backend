@@ -143,22 +143,26 @@ func mapServiceError(err error) error {
 }
 
 func userIDFromCtx(c *fiber.Ctx) (uuid.UUID, error) {
-	// v := c.Locals("user_id")
+	v := c.Locals("user_id")
 
-	// switch id := v.(type) {
-	// case uuid.UUID:
-	// 	if id == uuid.Nil {
-	// 		return uuid.Nil, errors.New("missing user_id")
-	// 	}
-	// 	return id, nil
-	// case string:
-	// 	parsed, err := uuid.Parse(id)
-	// 	if err != nil {
-	// 		return uuid.Nil, err
-	// 	}
-	// 	return parsed, nil
-	// default:
-	// 	return uuid.Nil, errors.New("missing user_id")
-	// }
-	return uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), nil
+	switch id := v.(type) {
+	case uuid.UUID:
+		if id == uuid.Nil {
+			return uuid.Nil, errors.New("missing user_id")
+		}
+		return id, nil
+
+	case string:
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if parsed == uuid.Nil {
+			return uuid.Nil, errors.New("missing user_id")
+		}
+		return parsed, nil
+
+	default:
+		return uuid.Nil, errors.New("missing user_id")
+	}
 }

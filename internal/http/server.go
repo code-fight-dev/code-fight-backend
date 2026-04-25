@@ -68,7 +68,7 @@ func New(
 	matchesGroup := protectedGroup("/matches")
 	matchesHandler.RegisterRoutes(matchesGroup)
 
-	submissionsAPIGroup := protectedGroup("/api")
+	submissionsAPIGroup := protectedGroup("/api", authHandler.RequireAuth)
 	submissionsInternalGroup := internalGroup("/internal")
 	submissionsHandler.RegisterRoutes(submissionsAPIGroup, submissionsInternalGroup)
 
