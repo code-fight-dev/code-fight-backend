@@ -276,6 +276,51 @@ func (s *Service) validateInput(input CreateSubmissionRequest) error {
 }
 
 func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
+	limits, err := s.repo.GetJudgeTaskLimits(ctx, sub.TaskID)
+	if err != nil {
+		return fmt.Errorf("get judge task limits: %w", err)
+	}
+
+	taskTests, err := s.repo.ListJudgeTaskTestCases(ctx, sub.TaskID)
+	if err != nil {
+		return fmt.Errorf("list judge task test cases: %w", err)
+	}
+
+	if len(taskTests) == 0 {
+		return fmt.Errorf("task has no active test cases")
+	}
+
+	timeMS := limits.TimeLimitMS
+	if timeMS <= 0 {
+		timeMS = 5000
+	}
+
+	memoryMB := limits.MemoryLimitKB / 1024
+	if memoryMB <= 0 {
+		memoryMB = 256
+	}
+
+	judgeTests := make([]judge.SubmitTest, 0, len(taskTests))
+
+	for _, test := range taskTests {
+		points := test.Weight
+		if points <= 0 {
+			points = 1
+		}
+
+		testID := test.OrderNo
+		if testID <= 0 {
+			testID = len(judgeTests) + 1
+		}
+
+		judgeTests = append(judgeTests, judge.SubmitTest{
+			ID:             testID,
+			Input:          test.InputBlobRef,
+			ExpectedOutput: test.ExpectedBlobRef,
+			Points:         points,
+		})
+	}
+
 	resp, err := s.judgeClient.Submit(ctx, judge.SubmitRequest{
 		SubmissionID:    sub.ID,
 		TaskID:          sub.TaskID,
@@ -284,6 +329,13 @@ func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 		SourceCode:      sub.SourceCode,
 		CallbackURL:     s.callbackURL,
 		CallbackToken:   s.callbackToken,
+
+		Limits: judge.SubmitLimits{
+			TimeMS:   timeMS,
+			MemoryMB: memoryMB,
+			OutputKB: 64,
+		},
+		Tests: judgeTests,
 	})
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)

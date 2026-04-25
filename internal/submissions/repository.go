@@ -38,10 +38,26 @@ type Repository interface {
 	GetByJudgeSubmissionID(ctx context.Context, judgeSubmissionID string) (*Submission, error)
 	MarkSentToJudge(ctx context.Context, submissionID, judgeSubmissionID, judgeStatus string) error
 	Complete(ctx context.Context, submissionID string, input CompleteInput, tests []SubmissionTestResult) error
+
+	GetJudgeTaskLimits(ctx context.Context, taskID string) (*JudgeTaskLimits, error)
+	ListJudgeTaskTestCases(ctx context.Context, taskID string) ([]JudgeTaskTestCase, error)
 }
 
 type PGRepository struct {
 	db *pgxpool.Pool
+}
+
+type JudgeTaskLimits struct {
+	TimeLimitMS   int
+	MemoryLimitKB int
+}
+
+type JudgeTaskTestCase struct {
+	ID                string
+	OrderNo           int
+	InputBlobRef      string
+	ExpectedBlobRef   string
+	Weight            int
 }
 
 func NewPGRepository(db *pgxpool.Pool) *PGRepository {
@@ -277,6 +293,70 @@ func (r *PGRepository) getSubmissionRow(ctx context.Context, q querier, sql stri
 		return nil, err
 	}
 	return &s, nil
+}
+
+func (r *PGRepository) GetJudgeTaskLimits(ctx context.Context, taskID string) (*JudgeTaskLimits, error) {
+	var out JudgeTaskLimits
+
+	err := r.db.QueryRow(ctx, `
+		select
+			time_limit_ms,
+			memory_limit_kb
+		from tasks
+		where id = $1
+		  and is_active = true
+	`, taskID).Scan(
+		&out.TimeLimitMS,
+		&out.MemoryLimitKB,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
+func (r *PGRepository) ListJudgeTaskTestCases(ctx context.Context, taskID string) ([]JudgeTaskTestCase, error) {
+	rows, err := r.db.Query(ctx, `
+		select
+			id,
+			order_no,
+			input_blob_ref,
+			expected_blob_ref,
+			weight
+		from task_test_cases
+		where task_id = $1
+		  and is_active = true
+		order by order_no asc
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tests []JudgeTaskTestCase
+
+	for rows.Next() {
+		var t JudgeTaskTestCase
+
+		if err := rows.Scan(
+			&t.ID,
+			&t.OrderNo,
+			&t.InputBlobRef,
+			&t.ExpectedBlobRef,
+			&t.Weight,
+		); err != nil {
+			return nil, err
+		}
+
+		tests = append(tests, t)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tests, nil
 }
 
 type querier interface {
