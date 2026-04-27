@@ -7,6 +7,7 @@ import (
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/submissions"
+	"code-fight-backend/internal/tasks"
 	"code-fight-backend/internal/users"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,6 +20,7 @@ func New(
 	cfg config.Config,
 	authHandler *auth.Handler,
 	usersHandler *users.Handler,
+	tasksHandler *tasks.Handler,
 	matchesHandler *matches.Handler,
 	submissionsHandler *submissions.Handler,
 ) *fiber.App {
@@ -64,6 +66,9 @@ func New(
 
 	usersGroup := protectedGroup("/users")
 	usersHandler.RegisterRoutes(usersGroup)
+
+	tasksGroup := protectedGroup("/api")
+	tasksHandler.RegisterRoutes(tasksGroup)
 
 	matchesGroup := protectedGroup("/matches")
 	matchesHandler.RegisterRoutes(matchesGroup)
