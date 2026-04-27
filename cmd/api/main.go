@@ -13,6 +13,7 @@ import (
 	"code-fight-backend/internal/judge"
 	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/submissions"
+	"code-fight-backend/internal/tasks"
 	"code-fight-backend/internal/users"
 )
 
@@ -78,6 +79,10 @@ func main() {
 	)
 	matchesHandler := matches.NewHandler(matchesService)
 
+	tasksRepo := tasks.NewRepository(db)
+	tasksService := tasks.NewService(tasksRepo)
+	tasksHandler := tasks.NewHandler(tasksService)
+
 	submissionsService := submissions.NewService(
 		submissionsRepo,
 		submissionsTaskRepo,
@@ -104,6 +109,7 @@ func main() {
 		cfg,
 		authHandler,
 		usersHandler,
+		tasksHandler,
 		matchesHandler,
 		submissionsHandler,
 	)
