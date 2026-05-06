@@ -42,13 +42,14 @@ type challengePayload struct {
 }
 
 type challengeRow struct {
-	TaskID      string
-	Slug        string
-	Title       string
-	Difficulty  string
-	CreatedAt   time.Time
-	PayloadRaw  []byte
-	Languages   []string
+	TaskID              string
+	Slug                string
+	Title               string
+	Difficulty          string
+	CreatedAt           time.Time
+	PayloadRaw          []byte
+	Languages           []string
+	AcceptedSubmissions int
 }
 
 type languageVersionRow struct {
@@ -133,6 +134,13 @@ select
 	coalesce(
 		array_agg(distinct tl.language) filter (where tl.is_enabled),
 		array[]::text[]
+	),
+	(
+		select count(*)::int
+		from submissions s
+		where s.task_id = t.id
+		  and s.status = 'finished'
+		  and s.verdict = 'accepted'
 	)
 from tasks t
 left join task_languages tl on tl.task_id = t.id
@@ -142,7 +150,7 @@ group by t.id
 `
 
 	row := r.db.QueryRow(ctx, q, slug)
-	challengeRowValue, err := scanChallengeRow(row)
+	challengeRowValue, err := scanChallengeDetailRow(row)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -182,6 +190,7 @@ group by t.id
 		EstimatedMinutes:      payload.EstimatedMinutes,
 		Attempts:              payload.Attempts,
 		Popularity:            payload.Popularity,
+		AcceptedSubmissions:   challengeRowValue.AcceptedSubmissions,
 		CreatedAt:             payloadCreatedAt(payload, challengeRowValue.CreatedAt),
 		Progress:              payloadProgress(payload),
 		TestCases:             tests,
@@ -293,6 +302,31 @@ func scanChallengeRow(row interface {
 		&out.CreatedAt,
 		&payloadText,
 		&out.Languages,
+	)
+	if err != nil {
+		return challengeRow{}, err
+	}
+
+	out.PayloadRaw = []byte(payloadText)
+
+	return out, nil
+}
+
+func scanChallengeDetailRow(row interface {
+	Scan(dest ...any) error
+}) (challengeRow, error) {
+	var out challengeRow
+	var payloadText string
+
+	err := row.Scan(
+		&out.TaskID,
+		&out.Slug,
+		&out.Title,
+		&out.Difficulty,
+		&out.CreatedAt,
+		&payloadText,
+		&out.Languages,
+		&out.AcceptedSubmissions,
 	)
 	if err != nil {
 		return challengeRow{}, err
