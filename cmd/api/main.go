@@ -80,7 +80,7 @@ func main() {
 	matchesHandler := matches.NewHandler(matchesService)
 
 	tasksRepo := tasks.NewRepository(db)
-	tasksService := tasks.NewService(tasksRepo)
+	tasksService := tasks.NewService(tasksRepo, judgeHTTPClient)
 	tasksHandler := tasks.NewHandler(tasksService)
 
 	submissionsService := submissions.NewService(

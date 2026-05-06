@@ -102,7 +102,7 @@ order by t.created_at desc
 			Tags:               payload.Tags,
 			Category:           payload.Category,
 			Kind:               payloadKind(payload),
-			SupportedLanguages: normalizeLanguages(payloadLanguages(payload, row.Languages)),
+			SupportedLanguages: normalizeLanguages(payloadLanguagesAllowedByTask(payload, row.Languages)),
 			AcceptanceRate:     payload.AcceptanceRate,
 			EstimatedMinutes:   payload.EstimatedMinutes,
 			Attempts:           payload.Attempts,
@@ -175,7 +175,7 @@ group by t.id
 		Tags:                  payload.Tags,
 		Category:              payload.Category,
 		Kind:                  payloadKind(payload),
-		SupportedLanguages:    normalizeLanguages(payloadLanguages(payload, languages)),
+		SupportedLanguages:    normalizeLanguages(payloadLanguagesAllowedByTask(payload, languages)),
 		LanguageVersions:      versions,
 		StarterCodeByLanguage: payload.StarterCodeByLanguage,
 		AcceptanceRate:        payload.AcceptanceRate,
@@ -344,6 +344,34 @@ func payloadLanguages(payload challengePayload, fallback []string) []string {
 		return payload.SupportedLanguages
 	}
 	return fallback
+}
+
+func payloadLanguagesAllowedByTask(payload challengePayload, taskLanguages []string) []string {
+	payloadLanguagesValue := payloadLanguages(payload, taskLanguages)
+	if len(taskLanguages) == 0 {
+		return []string{}
+	}
+	if len(payloadLanguagesValue) == 0 {
+		return payloadLanguagesValue
+	}
+
+	allowed := make(map[string]struct{}, len(taskLanguages))
+	for _, language := range taskLanguages {
+		normalized := strings.TrimSpace(language)
+		if normalized != "" {
+			allowed[normalized] = struct{}{}
+		}
+	}
+
+	out := make([]string, 0, len(payloadLanguagesValue))
+	for _, language := range payloadLanguagesValue {
+		normalized := strings.TrimSpace(language)
+		if _, ok := allowed[normalized]; ok {
+			out = append(out, language)
+		}
+	}
+
+	return out
 }
 
 func normalizeLanguages(raw []string) []string {
