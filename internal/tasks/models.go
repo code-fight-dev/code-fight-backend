@@ -48,29 +48,26 @@ type Challenge struct {
 }
 
 type ChallengeListItem struct {
-	ID                  string          `json:"id"`
-	TaskID              string          `json:"taskId"`
-	Slug                string          `json:"slug"`
-	Title               string          `json:"title"`
-	Difficulty          string          `json:"difficulty"`
-	Summary             string          `json:"summary"`
-	Tags                []string        `json:"tags"`
-	Category            string          `json:"category"`
-	Kind                string          `json:"kind"`
-	SupportedLanguages  []string        `json:"supportedLanguages"`
-	AcceptanceRate      int             `json:"acceptanceRate"`
-	EstimatedMinutes    int             `json:"estimatedMinutes"`
-	Attempts            int             `json:"attempts"`
-	Popularity          int             `json:"popularity"`
-	CreatedAt           string          `json:"createdAt"`
-	Progress            string          `json:"progress"`
-	FrontendPayload        json.RawMessage `json:"frontendPayload"`
-	AcceptedSubmissions    int             `json:"acceptedSubmissions"`
-	AcceptedSubmissionRate int          `json:"acceptedSubmissionRate"`
-	TotalSubmissions       int             `json:"totalSubmissions"`
+	ID                 string   `json:"id"`
+	TaskID             string   `json:"taskId"`
+	Slug               string   `json:"slug"`
+	Title              string   `json:"title"`
+	Difficulty         string   `json:"difficulty"`
+	Summary            string   `json:"summary"`
+	Tags               []string `json:"tags"`
+	Category           string   `json:"category"`
+	Kind               string   `json:"kind"`
+	SupportedLanguages []string `json:"supportedLanguages"`
+	AcceptanceRate     int      `json:"acceptanceRate"`
+	EstimatedMinutes   int      `json:"estimatedMinutes"`
+	Attempts           int      `json:"attempts"`
+	Popularity         int      `json:"popularity"`
+	CreatedAt          string   `json:"createdAt"`
+	Progress           string   `json:"progress"`
 }
 
 type UserTaskStats struct {
+	TotalTasks      int `json:"totalTasks"`
 	SolvedTasks     int `json:"solvedTasks"`
 	InProgressTasks int `json:"inProgressTasks"`
 }

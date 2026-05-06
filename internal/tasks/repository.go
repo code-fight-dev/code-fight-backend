@@ -123,10 +123,6 @@ order by t.created_at desc
 			Popularity:         payload.Popularity,
 			CreatedAt:          payloadCreatedAt(payload, row.CreatedAt),
 			Progress:           payloadProgress(payload),
-			FrontendPayload:        normalizedPayloadRaw(row.PayloadRaw),
-			AcceptedSubmissions:    row.AcceptedSubmissions,
-			AcceptedSubmissionRate: acceptanceRate(row.AcceptedSubmissions, row.TotalSubmissions),
-			TotalSubmissions:       row.TotalSubmissions,
 		}
 
 		items = append(items, item)

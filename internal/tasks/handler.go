@@ -48,6 +48,7 @@ func (h *Handler) ListChallenges(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 
+		stats.TotalTasks = len(items)
 		response["userTaskStats"] = stats
 	}
 
