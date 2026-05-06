@@ -13,6 +13,7 @@ import (
 
 type Client interface {
 	Submit(ctx context.Context, req SubmitRequest) (*SubmitResponse, error)
+	SupportedLanguages(ctx context.Context) ([]SupportedLanguage, error)
 }
 
 type HTTPClient struct {
@@ -80,6 +81,37 @@ func (c *HTTPClient) Submit(ctx context.Context, req SubmitRequest) (*SubmitResp
 	}
 
 	return &out, nil
+}
+
+func (c *HTTPClient) SupportedLanguages(ctx context.Context) ([]SupportedLanguage, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/languages", nil)
+	if err != nil {
+		return nil, fmt.Errorf("judge languages: build request: %w", err)
+	}
+
+	httpReq.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("judge languages: send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	rawBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("judge languages: read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("judge languages: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(rawBody)))
+	}
+
+	var out []SupportedLanguage
+	if err := json.Unmarshal(rawBody, &out); err != nil {
+		return nil, fmt.Errorf("judge languages: decode response: %w", err)
+	}
+
+	return out, nil
 }
 
 func validateSubmitRequest(req SubmitRequest) error {

@@ -92,6 +92,14 @@ func (s *Service) CreateTaskSubmission(
 		return nil, ErrTaskLanguageNotAllowed
 	}
 
+	supported, err := s.isJudgeLanguageSupported(ctx, input.Language, input.LanguageVersion)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)
+	}
+	if !supported {
+		return nil, ErrTaskLanguageNotAllowed
+	}
+
 	now := time.Now().UTC()
 	sub := &Submission{
 		ID:              uuid.NewString(),
@@ -157,6 +165,14 @@ func (s *Service) CreateMatchSubmission(
 		return nil, err
 	}
 	if !allowed {
+		return nil, ErrTaskLanguageNotAllowed
+	}
+
+	supported, err := s.isJudgeLanguageSupported(ctx, input.Language, input.LanguageVersion)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)
+	}
+	if !supported {
 		return nil, ErrTaskLanguageNotAllowed
 	}
 
@@ -346,4 +362,22 @@ func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 	}
 
 	return nil
+}
+
+func (s *Service) isJudgeLanguageSupported(ctx context.Context, language, version string) (bool, error) {
+	supported, err := s.judgeClient.SupportedLanguages(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	language = strings.TrimSpace(language)
+	version = strings.TrimSpace(version)
+
+	for _, item := range supported {
+		if strings.TrimSpace(item.Language) == language && strings.TrimSpace(item.Version) == version {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }

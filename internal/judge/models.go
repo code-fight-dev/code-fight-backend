@@ -52,6 +52,11 @@ type SubmitResponse struct {
 	Status            string `json:"status"`
 }
 
+type SupportedLanguage struct {
+	Language string `json:"language"`
+	Version  string `json:"version"`
+}
+
 type CallbackPayload struct {
 	JudgeSubmissionID string               `json:"judge_submission_id"`
 	SubmissionID      string               `json:"submission_id"`
