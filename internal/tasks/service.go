@@ -41,6 +41,18 @@ func (s *Service) ListChallenges(ctx context.Context) ([]ChallengeListItem, erro
 	return items, nil
 }
 
+func (s *Service) GetUserTaskStats(ctx context.Context, userID string) (UserTaskStats, error) {
+	return s.repo.GetUserTaskStats(ctx, userID)
+}
+
+func (s *Service) ListUserTaskSubmissions(
+	ctx context.Context,
+	taskID string,
+	userID string,
+) ([]TaskSubmission, error) {
+	return s.repo.ListUserTaskSubmissions(ctx, taskID, userID)
+}
+
 func (s *Service) GetChallengeBySlug(ctx context.Context, slug string) (*Challenge, error) {
 	challenge, err := s.repo.GetChallengeBySlug(ctx, slug)
 	if err != nil || challenge == nil {
