@@ -81,7 +81,7 @@ func main() {
 
 	tasksRepo := tasks.NewRepository(db)
 	tasksService := tasks.NewService(tasksRepo, judgeHTTPClient)
-	tasksHandler := tasks.NewHandler(tasksService)
+	tasksHandler := tasks.NewHandler(tasksService, authService, cfg.SessionCookieName)
 
 	submissionsService := submissions.NewService(
 		submissionsRepo,

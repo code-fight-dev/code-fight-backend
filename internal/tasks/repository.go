@@ -50,6 +50,7 @@ type challengeRow struct {
 	PayloadRaw          []byte
 	Languages           []string
 	AcceptedSubmissions int
+	TotalSubmissions    int
 }
 
 type languageVersionRow struct {
@@ -69,11 +70,23 @@ select
 	coalesce(
 		array_agg(distinct tl.language) filter (where tl.is_enabled),
 		array[]::text[]
-	)
+	),
+	coalesce(stats.accepted_submissions, 0)::int,
+	coalesce(stats.total_submissions, 0)::int
 from tasks t
 left join task_languages tl on tl.task_id = t.id
+left join lateral (
+	select
+		count(*) filter (
+			where s.status = 'finished'
+			  and s.verdict = 'accepted'
+		) as accepted_submissions,
+		count(*) as total_submissions
+	from submissions s
+	where s.task_id = t.id
+) stats on true
 where t.is_active = true
-group by t.id
+group by t.id, stats.accepted_submissions, stats.total_submissions
 order by t.created_at desc
 `
 
@@ -104,9 +117,9 @@ order by t.created_at desc
 			Category:           payload.Category,
 			Kind:               payloadKind(payload),
 			SupportedLanguages: normalizeLanguages(payloadLanguagesAllowedByTask(payload, row.Languages)),
-			AcceptanceRate:     payload.AcceptanceRate,
+			AcceptanceRate:     acceptanceRate(row.AcceptedSubmissions, row.TotalSubmissions),
 			EstimatedMinutes:   payload.EstimatedMinutes,
-			Attempts:           payload.Attempts,
+			Attempts:           row.TotalSubmissions,
 			Popularity:         payload.Popularity,
 			CreatedAt:          payloadCreatedAt(payload, row.CreatedAt),
 			Progress:           payloadProgress(payload),
@@ -120,6 +133,148 @@ order by t.created_at desc
 	}
 
 	return items, nil
+}
+
+func (r *Repository) GetUserTaskStats(ctx context.Context, userID string) (UserTaskStats, error) {
+	const q = `
+with user_task_status as (
+	select
+		task_id,
+		bool_or(status = 'finished' and verdict = 'accepted') as solved
+	from submissions
+	where user_id = $1
+	group by task_id
+)
+select
+	count(*) filter (where solved)::int,
+	count(*) filter (where not solved)::int
+from user_task_status
+`
+
+	var stats UserTaskStats
+	if err := r.db.QueryRow(ctx, q, userID).Scan(&stats.SolvedTasks, &stats.InProgressTasks); err != nil {
+		return UserTaskStats{}, err
+	}
+
+	return stats, nil
+}
+
+func (r *Repository) ListUserTaskSubmissions(
+	ctx context.Context,
+	taskID string,
+	userID string,
+) ([]TaskSubmission, error) {
+	const q = `
+select
+	id::text,
+	match_id::text,
+	task_id::text,
+	user_id::text,
+	language,
+	language_version,
+	source_code,
+	status,
+	verdict,
+	judge_submission_id,
+	judge_status,
+	error_message,
+	passed_tests,
+	total_tests,
+	compile_time_ms,
+	run_time_ms,
+	peak_memory_kb,
+	score,
+	exit_code,
+	compile_log,
+	stdout_truncated,
+	stderr_truncated,
+	created_at,
+	started_at,
+	finished_at,
+	updated_at,
+	coalesce(test_results.items, '[]'::jsonb)::text
+from submissions
+left join lateral (
+	select jsonb_agg(
+		jsonb_build_object(
+			'testCaseId', str.test_case_id::text,
+			'status', str.status,
+			'timeMs', str.time_ms,
+			'memoryKb', str.memory_kb,
+			'exitCode', str.exit_code,
+			'checkerMessage', str.checker_message
+		)
+		order by str.created_at asc
+	) as items
+	from submission_test_results str
+where str.submission_id = submissions.id
+) test_results on true
+where submissions.task_id = $1
+  and submissions.user_id = $2
+order by submissions.created_at desc
+limit 100
+`
+
+	rows, err := r.db.Query(ctx, q, taskID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]TaskSubmission, 0)
+	for rows.Next() {
+		var item TaskSubmission
+		var createdAt time.Time
+		var updatedAt time.Time
+		var startedAt *time.Time
+		var finishedAt *time.Time
+		var testResultsText string
+
+		if err := rows.Scan(
+			&item.ID,
+			&item.MatchID,
+			&item.TaskID,
+			&item.UserID,
+			&item.Language,
+			&item.LanguageVersion,
+			&item.SourceCode,
+			&item.Status,
+			&item.Verdict,
+			&item.JudgeSubmissionID,
+			&item.JudgeStatus,
+			&item.ErrorMessage,
+			&item.PassedTests,
+			&item.TotalTests,
+			&item.CompileTimeMs,
+			&item.RunTimeMs,
+			&item.PeakMemoryKb,
+			&item.Score,
+			&item.ExitCode,
+			&item.CompileLog,
+			&item.StdoutTruncated,
+			&item.StderrTruncated,
+			&createdAt,
+			&startedAt,
+			&finishedAt,
+			&updatedAt,
+			&testResultsText,
+		); err != nil {
+			return nil, err
+		}
+
+		item.CreatedAt = formatTime(createdAt)
+		item.StartedAt = formatOptionalTime(startedAt)
+		item.FinishedAt = formatOptionalTime(finishedAt)
+		item.UpdatedAt = formatTime(updatedAt)
+		item.TestResults = decodeSubmissionTestResults([]byte(testResultsText))
+		out = append(out, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
 }
 
 func (r *Repository) GetChallengeBySlug(ctx context.Context, slug string) (*Challenge, error) {
@@ -141,6 +296,11 @@ select
 		where s.task_id = t.id
 		  and s.status = 'finished'
 		  and s.verdict = 'accepted'
+	),
+	(
+		select count(*)::int
+		from submissions s
+		where s.task_id = t.id
 	)
 from tasks t
 left join task_languages tl on tl.task_id = t.id
@@ -186,14 +346,17 @@ group by t.id
 		SupportedLanguages:    normalizeLanguages(payloadLanguagesAllowedByTask(payload, languages)),
 		LanguageVersions:      versions,
 		StarterCodeByLanguage: payload.StarterCodeByLanguage,
-		AcceptanceRate:        payload.AcceptanceRate,
+		AcceptanceRate:        acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
 		EstimatedMinutes:      payload.EstimatedMinutes,
-		Attempts:              payload.Attempts,
+		Attempts:              challengeRowValue.TotalSubmissions,
 		Popularity:            payload.Popularity,
-		AcceptedSubmissions:   challengeRowValue.AcceptedSubmissions,
-		CreatedAt:             payloadCreatedAt(payload, challengeRowValue.CreatedAt),
-		Progress:              payloadProgress(payload),
-		TestCases:             tests,
+		AcceptedSubmissions:    challengeRowValue.AcceptedSubmissions,
+		AcceptedSubmissionRate: acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
+		TotalSubmissions:       challengeRowValue.TotalSubmissions,
+		CreatedAt:              payloadCreatedAt(payload, challengeRowValue.CreatedAt),
+		Progress:               payloadProgress(payload),
+		TestCases:              tests,
+		FrontendPayload:        normalizedPayloadRaw(challengeRowValue.PayloadRaw),
 	}
 
 	return out, nil
@@ -302,6 +465,8 @@ func scanChallengeRow(row interface {
 		&out.CreatedAt,
 		&payloadText,
 		&out.Languages,
+		&out.AcceptedSubmissions,
+		&out.TotalSubmissions,
 	)
 	if err != nil {
 		return challengeRow{}, err
@@ -327,6 +492,7 @@ func scanChallengeDetailRow(row interface {
 		&payloadText,
 		&out.Languages,
 		&out.AcceptedSubmissions,
+		&out.TotalSubmissions,
 	)
 	if err != nil {
 		return challengeRow{}, err
@@ -341,6 +507,43 @@ func decodePayload(raw []byte) challengePayload {
 	var payload challengePayload
 	_ = json.Unmarshal(raw, &payload)
 	return payload
+}
+
+func decodeSubmissionTestResults(raw []byte) []TaskSubmissionTestResult {
+	var out []TaskSubmissionTestResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return []TaskSubmissionTestResult{}
+	}
+	if out == nil {
+		return []TaskSubmissionTestResult{}
+	}
+	return out
+}
+
+func normalizedPayloadRaw(raw []byte) json.RawMessage {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return json.RawMessage(`{}`)
+	}
+	return json.RawMessage(raw)
+}
+
+func acceptanceRate(accepted, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	return int(float64(accepted) / float64(total) * 100)
+}
+
+func formatTime(value time.Time) string {
+	return value.UTC().Format(time.RFC3339)
+}
+
+func formatOptionalTime(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := formatTime(*value)
+	return &formatted
 }
 
 func payloadID(payload challengePayload, slug string) string {
