@@ -35,6 +35,7 @@ type Challenge struct {
 	EstimatedMinutes      int               `json:"estimatedMinutes"`
 	Attempts              int               `json:"attempts"`
 	Popularity            int               `json:"popularity"`
+	AcceptedSubmissions   int               `json:"acceptedSubmissions"`
 	CreatedAt             string            `json:"createdAt"`
 	Progress              string            `json:"progress"`
 	TestCases             []TestCase        `json:"testCases"`
