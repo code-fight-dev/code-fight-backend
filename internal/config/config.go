@@ -22,6 +22,9 @@ const (
 	defaultJudgeBaseURL         = "http://localhost:8090"
 	defaultJudgeTimeout         = "10s"
 	defaultMaxSourceCodeBytes   = 65536
+	defaultMaxBodyBytes         = 1 << 20
+	defaultSubmissionRateLimit  = 10
+	defaultSubmissionRateWindow = "1m"
 )
 
 type Config struct {
@@ -45,8 +48,12 @@ type Config struct {
 	JudgeBaseURL         string
 	JudgeCallbackURL     string
 	JudgeCallbackToken   string
+	JudgeAPIToken        string
 	JudgeTimeout         time.Duration
 	MaxSourceCodeBytes   int
+	MaxBodyBytes         int
+	SubmissionRateLimit  int
+	SubmissionRateWindow time.Duration
 }
 
 func Load() (Config, error) {
@@ -91,8 +98,51 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("MAX_SOURCE_CODE_BYTES must be > 0")
 	}
 
+	maxBodyBytes, err := parseIntWithDefault("HTTP_MAX_BODY_BYTES", defaultMaxBodyBytes)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse HTTP_MAX_BODY_BYTES: %w", err)
+	}
+	if maxBodyBytes <= 0 {
+		return Config{}, fmt.Errorf("HTTP_MAX_BODY_BYTES must be > 0")
+	}
+
+	submissionRateLimit, err := parseIntWithDefault("SUBMISSION_RATE_LIMIT", defaultSubmissionRateLimit)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse SUBMISSION_RATE_LIMIT: %w", err)
+	}
+	if submissionRateLimit <= 0 {
+		return Config{}, fmt.Errorf("SUBMISSION_RATE_LIMIT must be > 0")
+	}
+
+	submissionRateWindow, err := time.ParseDuration(valueOrDefault("SUBMISSION_RATE_WINDOW", defaultSubmissionRateWindow))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse SUBMISSION_RATE_WINDOW: %w", err)
+	}
+	if submissionRateWindow <= 0 {
+		return Config{}, fmt.Errorf("SUBMISSION_RATE_WINDOW must be > 0")
+	}
+
 	backendBaseURL := normalizeBaseURL(valueOrDefault("BACKEND_PUBLIC_URL", defaultBackendBaseURL))
 	judgeCallbackURL := normalizeBaseURL(valueOrDefault("JUDGE_CALLBACK_URL", backendBaseURL+"/internal/judge/callback"))
+	judgeCallbackToken := strings.TrimSpace(os.Getenv("JUDGE_CALLBACK_TOKEN"))
+	judgeAPIToken := strings.TrimSpace(os.Getenv("JUDGE_API_TOKEN"))
+	if appEnv != "prod" {
+		if judgeCallbackToken == "" {
+			judgeCallbackToken = "dev-judge-callback-token"
+		}
+		if judgeAPIToken == "" {
+			judgeAPIToken = "dev-judge-api-token"
+		}
+	}
+
+	if appEnv == "prod" {
+		if judgeCallbackToken == "" {
+			return Config{}, fmt.Errorf("JUDGE_CALLBACK_TOKEN is required in prod")
+		}
+		if judgeAPIToken == "" {
+			return Config{}, fmt.Errorf("JUDGE_API_TOKEN is required in prod")
+		}
+	}
 
 	return Config{
 		AppEnv:                 appEnv,
@@ -112,11 +162,15 @@ func Load() (Config, error) {
 		GoogleClientID:         strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
 		GoogleSecret:           strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET")),
 
-		JudgeBaseURL:       normalizeBaseURL(valueOrDefault("JUDGE_BASE_URL", defaultJudgeBaseURL)),
-		JudgeCallbackURL:   judgeCallbackURL,
-		JudgeCallbackToken: strings.TrimSpace(os.Getenv("JUDGE_CALLBACK_TOKEN")),
-		JudgeTimeout:       judgeTimeout,
-		MaxSourceCodeBytes: maxSourceCodeBytes,
+		JudgeBaseURL:         normalizeBaseURL(valueOrDefault("JUDGE_BASE_URL", defaultJudgeBaseURL)),
+		JudgeCallbackURL:     judgeCallbackURL,
+		JudgeCallbackToken:   judgeCallbackToken,
+		JudgeAPIToken:        judgeAPIToken,
+		JudgeTimeout:         judgeTimeout,
+		MaxSourceCodeBytes:   maxSourceCodeBytes,
+		MaxBodyBytes:         maxBodyBytes,
+		SubmissionRateLimit:  submissionRateLimit,
+		SubmissionRateWindow: submissionRateWindow,
 	}, nil
 }
 

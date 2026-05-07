@@ -26,6 +26,7 @@ func New(
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: jsonErrorHandler,
+		BodyLimit:    cfg.MaxBodyBytes,
 	})
 
 	app.Use(recover.New())
@@ -73,7 +74,11 @@ func New(
 	matchesGroup := protectedGroup("/matches")
 	matchesHandler.RegisterRoutes(matchesGroup)
 
-	submissionsAPIGroup := protectedGroup("/api", authHandler.RequireAuth)
+	submissionsAPIGroup := protectedGroup(
+		"/api",
+		authHandler.RequireAuth,
+		newSubmissionLimiter(cfg.SubmissionRateLimit, cfg.SubmissionRateWindow),
+	)
 	submissionsInternalGroup := internalGroup("/internal")
 	submissionsHandler.RegisterRoutes(submissionsAPIGroup, submissionsInternalGroup)
 

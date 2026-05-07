@@ -1,7 +1,9 @@
 package submissions
 
 import (
+	"crypto/subtle"
 	"errors"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -88,7 +90,12 @@ func (h *Handler) CreateMatchSubmission(c *fiber.Ctx) error {
 }
 
 func (h *Handler) GetSubmission(c *fiber.Ctx) error {
-	sub, tests, err := h.service.GetByID(c.Context(), c.Params("submissionId"))
+	userID, err := userIDFromCtx(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
+	}
+
+	sub, tests, err := h.service.GetByIDForUser(c.Context(), c.Params("submissionId"), userID)
 	if err != nil {
 		return mapServiceError(err)
 	}
@@ -97,7 +104,9 @@ func (h *Handler) GetSubmission(c *fiber.Ctx) error {
 }
 
 func (h *Handler) JudgeCallback(c *fiber.Ctx) error {
-	if c.Get("X-Judge-Token") != h.callbackToken {
+	expected := strings.TrimSpace(h.callbackToken)
+	received := strings.TrimSpace(c.Get("X-Judge-Token"))
+	if expected == "" || received == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(received)) != 1 {
 		return fiber.NewError(fiber.StatusUnauthorized, ErrJudgeCallbackUnauthorized.Error())
 	}
 

@@ -210,10 +210,53 @@ func (s *Service) GetByID(ctx context.Context, submissionID string) (*Submission
 	return s.repo.GetByID(ctx, submissionID)
 }
 
+func (s *Service) GetByIDForUser(ctx context.Context, submissionID string, userID uuid.UUID) (*Submission, []SubmissionTestResult, error) {
+	sub, tests, err := s.repo.GetByID(ctx, submissionID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if sub.UserID == userID.String() {
+		return sub, tests, nil
+	}
+
+	if sub.MatchID == nil {
+		return nil, nil, ErrSubmissionNotFound
+	}
+
+	matchID, err := uuid.Parse(*sub.MatchID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse match id: %w", err)
+	}
+
+	match, err := s.matchRepo.GetMatch(ctx, matchID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if userID != match.Player1ID && userID != match.Player2ID {
+		return nil, nil, ErrSubmissionNotFound
+	}
+
+	return sub, tests, nil
+}
+
 func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.CallbackPayload) error {
 	sub, err := s.repo.GetByJudgeSubmissionID(ctx, payload.JudgeSubmissionID)
 	if err != nil {
 		return err
+	}
+
+	if err := s.validateJudgeCallback(ctx, sub, payload); err != nil {
+		return err
+	}
+
+	if sub.Status == StatusFinished || sub.Status == StatusFailed {
+		return nil
+	}
+
+	if payload.JudgeStatus == JudgeStatusRunning {
+		return s.repo.MarkRunning(ctx, sub.ID, payload.JudgeStatus, payload.StartedAt)
 	}
 
 	finalStatus := StatusFinished
@@ -272,6 +315,87 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 	}
 
 	return nil
+}
+
+func (s *Service) validateJudgeCallback(ctx context.Context, sub *Submission, payload judge.CallbackPayload) error {
+	if payload.SubmissionID != sub.ID {
+		return ErrJudgeCallbackUnauthorized
+	}
+
+	switch payload.JudgeStatus {
+	case JudgeStatusRunning:
+		return nil
+	case JudgeStatusFinished, JudgeStatusFailed:
+	default:
+		return ErrJudgeCallbackUnauthorized
+	}
+
+	if payload.JudgeStatus == JudgeStatusFinished {
+		if payload.Verdict == nil || !isAllowedVerdict(*payload.Verdict) {
+			return ErrJudgeCallbackUnauthorized
+		}
+	} else if payload.Verdict != nil && !isAllowedVerdict(*payload.Verdict) {
+		return ErrJudgeCallbackUnauthorized
+	}
+
+	if payload.PassedTests < 0 || payload.TotalTests < 0 || payload.Score < 0 {
+		return ErrJudgeCallbackUnauthorized
+	}
+	if payload.PassedTests > payload.TotalTests {
+		return ErrJudgeCallbackUnauthorized
+	}
+
+	allowedTests, err := s.repo.ListJudgeTaskTestCases(ctx, sub.TaskID)
+	if err != nil {
+		return err
+	}
+
+	allowed := make(map[string]struct{}, len(allowedTests))
+	for _, test := range allowedTests {
+		allowed[test.ID] = struct{}{}
+	}
+
+	for _, test := range payload.Tests {
+		if _, ok := allowed[test.TestCaseID]; !ok {
+			return ErrJudgeCallbackUnauthorized
+		}
+		if !isAllowedTestStatus(test.Status) {
+			return ErrJudgeCallbackUnauthorized
+		}
+	}
+
+	return nil
+}
+
+func isAllowedVerdict(verdict string) bool {
+	switch verdict {
+	case VerdictAccepted,
+		VerdictWrongAnswer,
+		VerdictTimeLimitExceeded,
+		VerdictMemoryLimitExceeded,
+		VerdictRuntimeError,
+		VerdictCompileError,
+		VerdictPresentationError,
+		VerdictSystemError:
+		return true
+	default:
+		return false
+	}
+}
+
+func isAllowedTestStatus(status string) bool {
+	switch status {
+	case VerdictAccepted,
+		VerdictWrongAnswer,
+		VerdictTimeLimitExceeded,
+		VerdictMemoryLimitExceeded,
+		VerdictRuntimeError,
+		VerdictSystemError,
+		"skipped":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) validateInput(input CreateSubmissionRequest) error {
