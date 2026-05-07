@@ -7,6 +7,7 @@ import (
 	"code-fight-backend/internal/auth"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 type Handler struct {
@@ -25,6 +26,7 @@ func NewHandler(service *Service, authService *auth.Service, cookieName string) 
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Get("/tasks", h.ListChallenges)
+	router.Get("/tasks/id/:taskId", h.GetChallengeByID)
 	router.Get("/tasks/:slug", h.GetChallengeBySlug)
 }
 
@@ -91,6 +93,42 @@ func (h *Handler) GetChallengeBySlug(c *fiber.Ctx) error {
 	})
 }
 
+func (h *Handler) GetChallengeByID(c *fiber.Ctx) error {
+	taskID := strings.TrimSpace(c.Params("taskId"))
+	if _, err := uuid.Parse(taskID); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid task id")
+	}
+
+	challenge, err := h.service.GetChallengeByID(c.Context(), taskID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	if challenge == nil {
+		return fiber.NewError(fiber.StatusNotFound, "task not found")
+	}
+
+	user, ok, err := h.currentUser(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	if ok {
+		history, err := h.service.ListUserTaskSubmissions(
+			c.Context(),
+			challenge.TaskID,
+			user.ID.String(),
+		)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+
+		challenge.SubmissionHistory = history
+	}
+
+	return c.JSON(fiber.Map{
+		"task": challenge,
+	})
+}
+
 func (h *Handler) currentUser(c *fiber.Ctx) (auth.PublicUser, bool, error) {
 	if h.authService == nil || strings.TrimSpace(h.cookieName) == "" {
 		return auth.PublicUser{}, false, nil
@@ -112,4 +150,3 @@ func (h *Handler) currentUser(c *fiber.Ctx) (auth.PublicUser, bool, error) {
 
 	return user, true, nil
 }
-

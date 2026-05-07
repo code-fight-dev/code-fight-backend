@@ -78,7 +78,7 @@ func main() {
 		taskSelector,
 		submissionsMatchReader,
 	)
-	matchesHandler := matches.NewHandler(matchesService)
+	matchesHandler := matches.NewHandler(matchesService, cfg.MatchDuration)
 
 	tasksRepo := tasks.NewRepository(db)
 	tasksService := tasks.NewService(tasksRepo, judgeHTTPClient)
@@ -108,6 +108,9 @@ func main() {
 
 	if cfg.SessionCleanupInterval > 0 {
 		go startSessionCleanupLoop(cleanupCtx, logger, authService, cfg.SessionCleanupInterval)
+	}
+	if cfg.MatchCleanupInterval > 0 {
+		go startMatchCleanupLoop(cleanupCtx, logger, matchesService, cfg.MatchCleanupInterval)
 	}
 
 	app := httpserver.New(
@@ -143,6 +146,33 @@ func startSessionCleanupLoop(ctx context.Context, logger *slog.Logger, authServi
 		case <-ticker.C:
 			if err := authService.CleanupExpiredSessions(ctx); err != nil {
 				logger.Error("cleanup expired sessions", "error", err)
+			}
+		}
+	}
+}
+
+func startMatchCleanupLoop(ctx context.Context, logger *slog.Logger, matchesService *matches.Service, interval time.Duration) {
+	if count, err := matchesService.FinishExpiredMatches(ctx, time.Now().UTC(), 50); err != nil {
+		logger.Error("finish expired matches", "error", err)
+	} else if count > 0 {
+		logger.Info("finished expired matches", "count", count)
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			count, err := matchesService.FinishExpiredMatches(ctx, time.Now().UTC(), 50)
+			if err != nil {
+				logger.Error("finish expired matches", "error", err)
+				continue
+			}
+			if count > 0 {
+				logger.Info("finished expired matches", "count", count)
 			}
 		}
 	}

@@ -71,6 +71,24 @@ func (s *Service) GetChallengeBySlug(ctx context.Context, slug string) (*Challen
 	return challenge, nil
 }
 
+func (s *Service) GetChallengeByID(ctx context.Context, taskID string) (*Challenge, error) {
+	challenge, err := s.repo.GetChallengeByID(ctx, taskID)
+	if err != nil || challenge == nil {
+		return challenge, err
+	}
+
+	capabilities, err := s.judgeCapabilities(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	challenge.SupportedLanguages = capabilities.filterLanguages(challenge.SupportedLanguages)
+	challenge.LanguageVersions = capabilities.filterVersions(challenge.LanguageVersions, challenge.SupportedLanguages)
+	challenge.StarterCodeByLanguage = filterStarterCode(challenge.StarterCodeByLanguage, challenge.SupportedLanguages)
+
+	return challenge, nil
+}
+
 func (s *Service) judgeCapabilities(ctx context.Context) (judgeCapabilities, error) {
 	supported, err := s.judge.SupportedLanguages(ctx)
 	if err != nil {
@@ -152,4 +170,3 @@ func filterStarterCode(starterCode map[string]string, languages []string) map[st
 
 	return out
 }
-
