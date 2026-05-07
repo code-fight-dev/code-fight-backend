@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +32,85 @@ func requireAllowedOrigin(allowedOrigins []string) fiber.Handler {
 
 		return fiber.NewError(fiber.StatusForbidden, "origin is not allowed")
 	}
+}
+
+func newSubmissionLimiter(max int, window time.Duration) fiber.Handler {
+	type bucket struct {
+		count   int
+		resetAt time.Time
+	}
+
+	if max <= 0 {
+		max = 10
+	}
+	if window <= 0 {
+		window = time.Minute
+	}
+
+	var (
+		mu      sync.Mutex
+		buckets = make(map[string]bucket)
+	)
+
+	return func(c *fiber.Ctx) error {
+		if c.Method() != fiber.MethodPost {
+			return c.Next()
+		}
+
+		scope, ok := submissionLimiterScope(c.Path())
+		if !ok {
+			return c.Next()
+		}
+
+		var userID string
+		switch id := c.Locals("user_id").(type) {
+		case string:
+			userID = id
+		default:
+			if id != nil {
+				userID = strings.TrimSpace(fmt.Sprint(id))
+			}
+		}
+		if userID == "" {
+			userID = c.IP()
+		}
+
+		key := userID + ":" + scope
+		now := time.Now()
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		current := buckets[key]
+		if current.resetAt.IsZero() || now.After(current.resetAt) {
+			buckets[key] = bucket{
+				count:   1,
+				resetAt: now.Add(window),
+			}
+			return c.Next()
+		}
+
+		if current.count >= max {
+			return fiber.NewError(fiber.StatusTooManyRequests, "too many submissions")
+		}
+
+		current.count++
+		buckets[key] = current
+
+		return c.Next()
+	}
+}
+
+func submissionLimiterScope(path string) (string, bool) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "tasks" && parts[3] == "submissions" {
+		return "task:" + parts[2], true
+	}
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "matches" && parts[3] == "submissions" {
+		return "match:" + parts[2], true
+	}
+
+	return "", false
 }
 
 func newAuthLimiter() fiber.Handler {
