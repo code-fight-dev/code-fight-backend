@@ -5,6 +5,7 @@ import (
 
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/config"
+	"code-fight-backend/internal/leaderboard"
 	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
@@ -21,6 +22,7 @@ func New(
 	authHandler *auth.Handler,
 	usersHandler *users.Handler,
 	tasksHandler *tasks.Handler,
+	leaderboardHandler *leaderboard.Handler,
 	matchesHandler *matches.Handler,
 	submissionsHandler *submissions.Handler,
 ) *fiber.App {
@@ -70,6 +72,7 @@ func New(
 
 	tasksGroup := protectedGroup("/api")
 	tasksHandler.RegisterRoutes(tasksGroup)
+	leaderboardHandler.RegisterRoutes(tasksGroup)
 
 	matchesGroup := protectedGroup("/matches")
 	matchesHandler.RegisterRoutes(matchesGroup)
