@@ -37,6 +37,7 @@ type Repository interface {
 	GetByID(ctx context.Context, id string) (*Submission, []SubmissionTestResult, error)
 	GetByJudgeSubmissionID(ctx context.Context, judgeSubmissionID string) (*Submission, error)
 	MarkSentToJudge(ctx context.Context, submissionID, judgeSubmissionID, judgeStatus string) error
+	MarkRunning(ctx context.Context, submissionID, judgeStatus string, startedAt *time.Time) error
 	Complete(ctx context.Context, submissionID string, input CompleteInput, tests []SubmissionTestResult) error
 
 	GetJudgeTaskLimits(ctx context.Context, taskID string) (*JudgeTaskLimits, error)
@@ -53,11 +54,11 @@ type JudgeTaskLimits struct {
 }
 
 type JudgeTaskTestCase struct {
-	ID                string
-	OrderNo           int
-	InputBlobRef      string
-	ExpectedBlobRef   string
-	Weight            int
+	ID              string
+	OrderNo         int
+	InputBlobRef    string
+	ExpectedBlobRef string
+	Weight          int
 }
 
 func NewPGRepository(db *pgxpool.Pool) *PGRepository {
@@ -388,4 +389,25 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+func (r *PGRepository) MarkRunning(ctx context.Context, submissionID, judgeStatus string, startedAt *time.Time) error {
+	const q = `
+update submissions
+set
+    status = 'running',
+    judge_status = $2,
+    started_at = coalesce(started_at, $3, now()),
+    updated_at = now()
+where id = $1
+  and status not in ('finished', 'failed')`
+
+	ct, err := r.db.Exec(ctx, q, submissionID, judgeStatus, startedAt)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return nil
+	}
+	return nil
 }
