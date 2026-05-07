@@ -11,6 +11,7 @@ import (
 	"code-fight-backend/internal/database"
 	httpserver "code-fight-backend/internal/http"
 	"code-fight-backend/internal/judge"
+	"code-fight-backend/internal/leaderboard"
 	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
@@ -83,6 +84,10 @@ func main() {
 	tasksService := tasks.NewService(tasksRepo, judgeHTTPClient)
 	tasksHandler := tasks.NewHandler(tasksService, authService, cfg.SessionCookieName)
 
+	leaderboardRepo := leaderboard.NewRepository(db)
+	leaderboardService := leaderboard.NewService(leaderboardRepo)
+	leaderboardHandler := leaderboard.NewHandler(leaderboardService, authService, cfg.SessionCookieName)
+
 	submissionsService := submissions.NewService(
 		submissionsRepo,
 		submissionsTaskRepo,
@@ -110,6 +115,7 @@ func main() {
 		authHandler,
 		usersHandler,
 		tasksHandler,
+		leaderboardHandler,
 		matchesHandler,
 		submissionsHandler,
 	)
