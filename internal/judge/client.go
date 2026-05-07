@@ -18,12 +18,14 @@ type Client interface {
 
 type HTTPClient struct {
 	baseURL    string
+	apiToken   string
 	httpClient *http.Client
 }
 
-func NewHTTPClient(baseURL string, timeout time.Duration) *HTTPClient {
+func NewHTTPClient(baseURL string, timeout time.Duration, apiToken string) *HTTPClient {
 	return &HTTPClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		apiToken: strings.TrimSpace(apiToken),
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
@@ -52,6 +54,7 @@ func (c *HTTPClient) Submit(ctx context.Context, req SubmitRequest) (*SubmitResp
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
+	c.setAuthHeader(httpReq)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -90,6 +93,7 @@ func (c *HTTPClient) SupportedLanguages(ctx context.Context) ([]SupportedLanguag
 	}
 
 	httpReq.Header.Set("Accept", "application/json")
+	c.setAuthHeader(httpReq)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -112,6 +116,14 @@ func (c *HTTPClient) SupportedLanguages(ctx context.Context) ([]SupportedLanguag
 	}
 
 	return out, nil
+}
+
+func (c *HTTPClient) setAuthHeader(req *http.Request) {
+	if c.apiToken == "" {
+		return
+	}
+
+	req.Header.Set("X-Judge-Token", c.apiToken)
 }
 
 func validateSubmitRequest(req SubmitRequest) error {

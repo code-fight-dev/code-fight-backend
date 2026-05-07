@@ -63,7 +63,7 @@ func main() {
 	usersService := users.NewService(usersRepository)
 	usersHandler := users.NewHandler(usersService, authService, cfg.SessionCookieName)
 
-	judgeHTTPClient := judge.NewHTTPClient(cfg.JudgeBaseURL, cfg.JudgeTimeout)
+	judgeHTTPClient := judge.NewHTTPClient(cfg.JudgeBaseURL, cfg.JudgeTimeout, cfg.JudgeAPIToken)
 
 	matchesRepo := matches.NewRepository(db)
 	taskSelector := matches.NewDBTaskSelector(db)
