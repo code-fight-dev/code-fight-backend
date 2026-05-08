@@ -74,7 +74,7 @@ func New(
 	tasksHandler.RegisterRoutes(tasksGroup)
 	leaderboardHandler.RegisterRoutes(tasksGroup)
 
-	matchesGroup := protectedGroup("/matches")
+	matchesGroup := protectedGroup("/api/matches", authHandler.RequireAuth)
 	matchesHandler.RegisterRoutes(matchesGroup)
 
 	submissionsAPIGroup := protectedGroup(
@@ -84,6 +84,7 @@ func New(
 	)
 	submissionsInternalGroup := internalGroup("/internal")
 	submissionsHandler.RegisterRoutes(submissionsAPIGroup, submissionsInternalGroup)
+	matchesHandler.RegisterInternalRoutes(submissionsInternalGroup)
 
 	return app
 }

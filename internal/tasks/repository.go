@@ -330,26 +330,26 @@ group by t.id
 	}
 
 	out := &Challenge{
-		ID:                    payloadID(payload, challengeRowValue.Slug),
-		TaskID:                challengeRowValue.TaskID,
-		Slug:                  challengeRowValue.Slug,
-		Title:                 fallbackString(payload.Title, challengeRowValue.Title),
-		Difficulty:            toFrontendDifficulty(challengeRowValue.Difficulty),
-		Summary:               payload.Summary,
-		Description:           payload.Description,
-		Examples:              payload.Examples,
-		Constraints:           payload.Constraints,
-		Notes:                 payload.Notes,
-		Tags:                  payload.Tags,
-		Category:              payload.Category,
-		Kind:                  payloadKind(payload),
-		SupportedLanguages:    normalizeLanguages(payloadLanguagesAllowedByTask(payload, languages)),
-		LanguageVersions:      versions,
-		StarterCodeByLanguage: payload.StarterCodeByLanguage,
-		AcceptanceRate:        acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
-		EstimatedMinutes:      payload.EstimatedMinutes,
-		Attempts:              challengeRowValue.TotalSubmissions,
-		Popularity:            payload.Popularity,
+		ID:                     payloadID(payload, challengeRowValue.Slug),
+		TaskID:                 challengeRowValue.TaskID,
+		Slug:                   challengeRowValue.Slug,
+		Title:                  fallbackString(payload.Title, challengeRowValue.Title),
+		Difficulty:             toFrontendDifficulty(challengeRowValue.Difficulty),
+		Summary:                payload.Summary,
+		Description:            payload.Description,
+		Examples:               payload.Examples,
+		Constraints:            payload.Constraints,
+		Notes:                  payload.Notes,
+		Tags:                   payload.Tags,
+		Category:               payload.Category,
+		Kind:                   payloadKind(payload),
+		SupportedLanguages:     normalizeLanguages(payloadLanguagesAllowedByTask(payload, languages)),
+		LanguageVersions:       versions,
+		StarterCodeByLanguage:  payload.StarterCodeByLanguage,
+		AcceptanceRate:         acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
+		EstimatedMinutes:       payload.EstimatedMinutes,
+		Attempts:               challengeRowValue.TotalSubmissions,
+		Popularity:             payload.Popularity,
 		AcceptedSubmissions:    challengeRowValue.AcceptedSubmissions,
 		AcceptedSubmissionRate: acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
 		TotalSubmissions:       challengeRowValue.TotalSubmissions,
@@ -360,6 +360,54 @@ group by t.id
 	}
 
 	return out, nil
+}
+
+func (r *Repository) GetChallengeByID(ctx context.Context, taskID string) (*Challenge, error) {
+	const q = `
+select
+	t.id::text,
+	t.slug,
+	t.title,
+	t.difficulty,
+	t.created_at,
+	coalesce(t.frontend_payload, '{}'::jsonb)::text,
+	coalesce(
+		array_agg(distinct tl.language) filter (where tl.is_enabled),
+		array[]::text[]
+	),
+	(
+		select count(*)::int
+		from submissions s
+		where s.task_id = t.id
+		  and s.status = 'finished'
+		  and s.verdict = 'accepted'
+	),
+	(
+		select count(*)::int
+		from submissions s
+		where s.task_id = t.id
+	)
+from tasks t
+left join task_languages tl on tl.task_id = t.id
+where t.id = $1
+  and t.is_active = true
+group by t.id
+`
+
+	row := r.db.QueryRow(ctx, q, taskID)
+	challengeRowValue, err := scanChallengeDetailRow(row)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return r.buildChallengeDetail(ctx, challengeRowValue)
+}
+
+func (r *Repository) buildChallengeDetail(ctx context.Context, challengeRowValue challengeRow) (*Challenge, error) {
+	return r.buildChallengeDetail(ctx, challengeRowValue)
 }
 
 func (r *Repository) listLanguageVersions(

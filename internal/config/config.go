@@ -25,6 +25,8 @@ const (
 	defaultMaxBodyBytes         = 1 << 20
 	defaultSubmissionRateLimit  = 10
 	defaultSubmissionRateWindow = "1m"
+	defaultMatchDuration        = "20m"
+	defaultMatchCleanupInterval = "30s"
 )
 
 type Config struct {
@@ -54,6 +56,8 @@ type Config struct {
 	MaxBodyBytes         int
 	SubmissionRateLimit  int
 	SubmissionRateWindow time.Duration
+	MatchDuration        time.Duration
+	MatchCleanupInterval time.Duration
 }
 
 func Load() (Config, error) {
@@ -122,6 +126,22 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("SUBMISSION_RATE_WINDOW must be > 0")
 	}
 
+	matchDuration, err := time.ParseDuration(valueOrDefault("MATCH_DURATION", defaultMatchDuration))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse MATCH_DURATION: %w", err)
+	}
+	if matchDuration <= 0 {
+		return Config{}, fmt.Errorf("MATCH_DURATION must be > 0")
+	}
+
+	matchCleanupInterval, err := time.ParseDuration(valueOrDefault("MATCH_CLEANUP_INTERVAL", defaultMatchCleanupInterval))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse MATCH_CLEANUP_INTERVAL: %w", err)
+	}
+	if matchCleanupInterval <= 0 {
+		return Config{}, fmt.Errorf("MATCH_CLEANUP_INTERVAL must be > 0")
+	}
+
 	backendBaseURL := normalizeBaseURL(valueOrDefault("BACKEND_PUBLIC_URL", defaultBackendBaseURL))
 	judgeCallbackURL := normalizeBaseURL(valueOrDefault("JUDGE_CALLBACK_URL", backendBaseURL+"/internal/judge/callback"))
 	judgeCallbackToken := strings.TrimSpace(os.Getenv("JUDGE_CALLBACK_TOKEN"))
@@ -171,6 +191,8 @@ func Load() (Config, error) {
 		MaxBodyBytes:         maxBodyBytes,
 		SubmissionRateLimit:  submissionRateLimit,
 		SubmissionRateWindow: submissionRateWindow,
+		MatchDuration:        matchDuration,
+		MatchCleanupInterval: matchCleanupInterval,
 	}, nil
 }
 

@@ -3,7 +3,7 @@ package matches
 import (
 	"context"
 	"time"
-	
+
 	"github.com/google/uuid"
 )
 
@@ -56,6 +56,7 @@ const (
 	WinningReasonAcceptedFaster    WinningReason = "accepted_faster"
 	WinningReasonAcceptedMoreTests WinningReason = "accepted_more_tests"
 	WinningReasonOpponentFailed    WinningReason = "opponent_failed"
+	WinningReasonSurrender         WinningReason = "surrender"
 	WinningReasonDraw              WinningReason = "draw"
 	WinningReasonCancelled         WinningReason = "cancelled"
 )
@@ -68,6 +69,8 @@ type Match struct {
 	TaskDifficultySnapshot *TaskDifficulty  `json:"task_difficulty_snapshot,omitempty"`
 	Player1ID              uuid.UUID        `json:"player1_id"`
 	Player2ID              uuid.UUID        `json:"player2_id"`
+	Player1Ready           bool             `json:"player1_ready"`
+	Player2Ready           bool             `json:"player2_ready"`
 	WinnerID               *uuid.UUID       `json:"winner_id,omitempty"`
 	Status                 MatchStatus      `json:"status"`
 	JudgeStatus            JudgeStatus      `json:"judge_status"`
@@ -87,6 +90,7 @@ type Match struct {
 
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
@@ -99,21 +103,41 @@ type CreateMatchInput struct {
 	IsRated    bool      `json:"is_rated"`
 }
 
+type JoinQueueInput struct {
+	UserID     uuid.UUID `json:"user_id"`
+	RatingMode string    `json:"rating_mode"`
+	TaskMode   TaskMode  `json:"task_mode"`
+	IsRated    bool      `json:"is_rated"`
+}
+
+type QueueResult struct {
+	Status string `json:"status"`
+	Match  *Match `json:"match,omitempty"`
+}
+
 type StartMatchInput struct {
-	MatchID uuid.UUID `json:"match_id"`
+	MatchID  uuid.UUID     `json:"match_id"`
+	ActorID  uuid.UUID     `json:"actor_id"`
+	Duration time.Duration `json:"duration"`
 }
 
 type FinishMatchInput struct {
-	MatchID       uuid.UUID        `json:"match_id"`
-	WinnerID      *uuid.UUID       `json:"winner_id,omitempty"`
-	ResultType    MatchResultType  `json:"result_type"`
-	WinningReason WinningReason    `json:"winning_reason"`
-	FinishedAt    *time.Time       `json:"finished_at,omitempty"`
-	JudgeStatus   *JudgeStatus     `json:"judge_status,omitempty"`
+	MatchID       uuid.UUID       `json:"match_id"`
+	WinnerID      *uuid.UUID      `json:"winner_id,omitempty"`
+	ResultType    MatchResultType `json:"result_type"`
+	WinningReason WinningReason   `json:"winning_reason"`
+	FinishedAt    *time.Time      `json:"finished_at,omitempty"`
+	JudgeStatus   *JudgeStatus    `json:"judge_status,omitempty"`
 }
 
 type CancelMatchInput struct {
 	MatchID uuid.UUID `json:"match_id"`
+	ActorID uuid.UUID `json:"actor_id"`
+}
+
+type SurrenderMatchInput struct {
+	MatchID uuid.UUID `json:"match_id"`
+	ActorID uuid.UUID `json:"actor_id"`
 }
 
 type ListUserMatchesInput struct {
@@ -155,10 +179,28 @@ type SelectedTask struct {
 }
 
 type ApplySubmissionProgressInput struct {
-	MatchID      uuid.UUID
-	UserID       uuid.UUID
-	Score        int
-	IsAccepted   bool
-	SolvedAt     *time.Time
-	JudgeStatus  *string
+	MatchID     uuid.UUID
+	UserID      uuid.UUID
+	Score       int
+	IsAccepted  bool
+	SolvedAt    *time.Time
+	JudgeStatus *string
+}
+
+type MatchSubmission struct {
+	ID              uuid.UUID  `json:"id"`
+	MatchID         uuid.UUID  `json:"matchId"`
+	TaskID          uuid.UUID  `json:"taskId"`
+	UserID          uuid.UUID  `json:"userId"`
+	Language        string     `json:"language"`
+	LanguageVersion string     `json:"languageVersion"`
+	Status          string     `json:"status"`
+	Verdict         *string    `json:"verdict,omitempty"`
+	PassedTests     int        `json:"passedTests"`
+	TotalTests      int        `json:"totalTests"`
+	Score           int        `json:"score"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	StartedAt       *time.Time `json:"startedAt,omitempty"`
+	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
 }
