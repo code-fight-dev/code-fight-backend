@@ -26,6 +26,7 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/queue", h.JoinQueue)
 	router.Post("/:id/start", h.StartMatch)
 	router.Post("/:id/cancel", h.CancelMatch)
+	router.Post("/:id/surrender", h.SurrenderMatch)
 	router.Get("/current", h.GetCurrentMatch)
 	router.Get("/:id", h.GetMatch)
 	router.Get("/:id/submissions", h.ListMatchSubmissions)
@@ -195,6 +196,7 @@ func (h *Handler) FinishMatch(c *fiber.Ctx) error {
 	case WinningReasonAcceptedFaster,
 		WinningReasonAcceptedMoreTests,
 		WinningReasonOpponentFailed,
+		WinningReasonSurrender,
 		WinningReasonDraw:
 	default:
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid winning_reason"})
@@ -237,6 +239,28 @@ func (h *Handler) CancelMatch(c *fiber.Ctx) error {
 	}
 
 	err = h.service.CancelMatch(c.UserContext(), CancelMatchInput{
+		MatchID: matchID,
+		ActorID: userID,
+	})
+	if err != nil {
+		return writeMatchError(c, err)
+	}
+
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *Handler) SurrenderMatch(c *fiber.Ctx) error {
+	userID, err := userIDFromCtx(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
+	}
+
+	matchID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid match id"})
+	}
+
+	err = h.service.SurrenderMatch(c.UserContext(), SurrenderMatchInput{
 		MatchID: matchID,
 		ActorID: userID,
 	})

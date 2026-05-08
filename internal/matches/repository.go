@@ -29,6 +29,8 @@ const matchSelectColumns = `
 	task_difficulty_snapshot,
 	player1_id,
 	player2_id,
+	player1_ready,
+	player2_ready,
 	winner_id,
 	status,
 	judge_status,
@@ -61,6 +63,8 @@ func (r *Repository) CreateMatch(ctx context.Context, match Match) (Match, error
 			task_difficulty_snapshot,
 			player1_id,
 			player2_id,
+			player1_ready,
+			player2_ready,
 			winner_id,
 			status,
 			judge_status,
@@ -87,7 +91,8 @@ func (r *Repository) CreateMatch(ctx context.Context, match Match) (Match, error
 			$6, $7, $8, $9, $10,
 			$11, $12, $13, $14, $15,
 			$16, $17, $18, $19, $20,
-			$21, $22, $23, $24, $25, now(), now()
+			$21, $22, $23, $24, $25,
+			$26, $27, now(), now()
 		)
 		returning ` + matchSelectColumns
 
@@ -101,6 +106,8 @@ func (r *Repository) CreateMatch(ctx context.Context, match Match) (Match, error
 		match.TaskDifficultySnapshot,
 		match.Player1ID,
 		match.Player2ID,
+		match.Player1Ready,
+		match.Player2Ready,
 		match.WinnerID,
 		match.Status,
 		match.JudgeStatus,
@@ -147,7 +154,7 @@ func (r *Repository) GetMatch(ctx context.Context, matchID uuid.UUID) (Match, er
 	return match, nil
 }
 
-func (r *Repository) StartMatch(ctx context.Context, matchID uuid.UUID, duration time.Duration) (Match, error) {
+func (r *Repository) StartMatch(ctx context.Context, matchID uuid.UUID, actorID uuid.UUID, duration time.Duration) (Match, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return Match{}, fmt.Errorf("begin tx: %w", err)
@@ -171,10 +178,39 @@ func (r *Repository) StartMatch(ctx context.Context, matchID uuid.UUID, duration
 		return Match{}, ErrInvalidMatchStatus
 	}
 
+	if actorID != match.Player1ID && actorID != match.Player2ID {
+		return Match{}, ErrSubmissionUserNotInMatch
+	}
+
+	player1Ready := match.Player1Ready || actorID == match.Player1ID
+	player2Ready := match.Player2Ready || actorID == match.Player2ID
+	if !player1Ready || !player2Ready {
+		query := `
+			update matches
+			set player1_ready = $2,
+				player2_ready = $3,
+				updated_at = now()
+			where id = $1
+			returning ` + matchSelectColumns
+
+		updated, err := scanMatch(tx.QueryRow(ctx, query, matchID, player1Ready, player2Ready))
+		if err != nil {
+			return Match{}, fmt.Errorf("accept match: %w", err)
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return Match{}, fmt.Errorf("commit tx: %w", err)
+		}
+
+		return updated, nil
+	}
+
 	query := `
 		update matches
 		set status = $2,
 			judge_status = $3,
+			player1_ready = true,
+			player2_ready = true,
 			started_at = now(),
 			expires_at = now() + ($4::text)::interval,
 			updated_at = now()
@@ -217,7 +253,9 @@ func (r *Repository) CancelMatch(ctx context.Context, matchID uuid.UUID) error {
 	}
 
 	switch match.Status {
-	case MatchStatusPending, MatchStatusRunning:
+	case MatchStatusPending:
+	case MatchStatusRunning:
+		return ErrMatchAlreadyStarted
 	case MatchStatusFinished:
 		return ErrMatchAlreadyFinished
 	case MatchStatusCancelled:
@@ -825,6 +863,8 @@ func scanMatch(row matchScanner) (Match, error) {
 		&match.TaskDifficultySnapshot,
 		&match.Player1ID,
 		&match.Player2ID,
+		&match.Player1Ready,
+		&match.Player2Ready,
 		&match.WinnerID,
 		&match.Status,
 		&match.JudgeStatus,

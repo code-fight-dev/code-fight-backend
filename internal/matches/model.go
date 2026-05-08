@@ -56,6 +56,7 @@ const (
 	WinningReasonAcceptedFaster    WinningReason = "accepted_faster"
 	WinningReasonAcceptedMoreTests WinningReason = "accepted_more_tests"
 	WinningReasonOpponentFailed    WinningReason = "opponent_failed"
+	WinningReasonSurrender         WinningReason = "surrender"
 	WinningReasonDraw              WinningReason = "draw"
 	WinningReasonCancelled         WinningReason = "cancelled"
 )
@@ -68,6 +69,8 @@ type Match struct {
 	TaskDifficultySnapshot *TaskDifficulty  `json:"task_difficulty_snapshot,omitempty"`
 	Player1ID              uuid.UUID        `json:"player1_id"`
 	Player2ID              uuid.UUID        `json:"player2_id"`
+	Player1Ready           bool             `json:"player1_ready"`
+	Player2Ready           bool             `json:"player2_ready"`
 	WinnerID               *uuid.UUID       `json:"winner_id,omitempty"`
 	Status                 MatchStatus      `json:"status"`
 	JudgeStatus            JudgeStatus      `json:"judge_status"`
@@ -128,6 +131,11 @@ type FinishMatchInput struct {
 }
 
 type CancelMatchInput struct {
+	MatchID uuid.UUID `json:"match_id"`
+	ActorID uuid.UUID `json:"actor_id"`
+}
+
+type SurrenderMatchInput struct {
 	MatchID uuid.UUID `json:"match_id"`
 	ActorID uuid.UUID `json:"actor_id"`
 }

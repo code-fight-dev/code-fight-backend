@@ -12,7 +12,7 @@ import (
 type RepositoryInterface interface {
 	CreateMatch(ctx context.Context, match Match) (Match, error)
 	GetMatch(ctx context.Context, matchID uuid.UUID) (Match, error)
-	StartMatch(ctx context.Context, matchID uuid.UUID, duration time.Duration) (Match, error)
+	StartMatch(ctx context.Context, matchID uuid.UUID, actorID uuid.UUID, duration time.Duration) (Match, error)
 	FinishMatch(ctx context.Context, input FinishMatchInput) error
 	CancelMatch(ctx context.Context, matchID uuid.UUID) error
 	ListUserMatches(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Match, error)
@@ -119,7 +119,7 @@ func (s *Service) StartMatch(ctx context.Context, input StartMatchInput) (Match,
 		return Match{}, ErrTaskNotAssigned
 	}
 
-	return s.repo.StartMatch(ctx, input.MatchID, input.Duration)
+	return s.repo.StartMatch(ctx, input.MatchID, input.ActorID, input.Duration)
 }
 
 func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueResult, error) {
@@ -185,6 +185,7 @@ func (s *Service) FinishMatch(ctx context.Context, input FinishMatchInput) error
 	case WinningReasonAcceptedFaster,
 		WinningReasonAcceptedMoreTests,
 		WinningReasonOpponentFailed,
+		WinningReasonSurrender,
 		WinningReasonDraw:
 	default:
 		return ErrInvalidWinningReason
@@ -230,8 +231,47 @@ func (s *Service) CancelMatch(ctx context.Context, input CancelMatchInput) error
 	if input.ActorID != match.Player1ID && input.ActorID != match.Player2ID {
 		return ErrSubmissionUserNotInMatch
 	}
+	if match.Status == MatchStatusRunning {
+		return ErrMatchAlreadyStarted
+	}
 
 	return s.repo.CancelMatch(ctx, input.MatchID)
+}
+
+func (s *Service) SurrenderMatch(ctx context.Context, input SurrenderMatchInput) error {
+	if input.MatchID == uuid.Nil {
+		return fmt.Errorf("surrender match: empty match id")
+	}
+	if input.ActorID == uuid.Nil {
+		return fmt.Errorf("surrender match: empty actor id")
+	}
+
+	match, err := s.repo.GetMatch(ctx, input.MatchID)
+	if err != nil {
+		return err
+	}
+	if input.ActorID != match.Player1ID && input.ActorID != match.Player2ID {
+		return ErrSubmissionUserNotInMatch
+	}
+	if match.Status != MatchStatusRunning {
+		return ErrInvalidMatchStatus
+	}
+
+	winnerID := match.Player1ID
+	resultType := MatchResultTypePlayer1Win
+	if input.ActorID == match.Player1ID {
+		winnerID = match.Player2ID
+		resultType = MatchResultTypePlayer2Win
+	}
+
+	judgeStatus := JudgeStatusFinished
+	return s.repo.FinishMatch(ctx, FinishMatchInput{
+		MatchID:       match.ID,
+		WinnerID:      &winnerID,
+		ResultType:    resultType,
+		WinningReason: WinningReasonSurrender,
+		JudgeStatus:   &judgeStatus,
+	})
 }
 
 func (s *Service) GetMatch(ctx context.Context, matchID uuid.UUID) (Match, error) {
