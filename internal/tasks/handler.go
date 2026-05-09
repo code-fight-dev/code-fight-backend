@@ -31,7 +31,17 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 }
 
 func (h *Handler) ListChallenges(c *fiber.Ctx) error {
-	items, err := h.service.ListChallenges(c.Context())
+	user, ok, err := h.currentUser(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+
+	var items []ChallengeListItem
+	if ok {
+		items, err = h.service.ListChallengesForUser(c.Context(), user.ID.String())
+	} else {
+		items, err = h.service.ListChallenges(c.Context())
+	}
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
@@ -40,10 +50,6 @@ func (h *Handler) ListChallenges(c *fiber.Ctx) error {
 		"items": items,
 	}
 
-	user, ok, err := h.currentUser(c)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-	}
 	if ok {
 		stats, err := h.service.GetUserTaskStats(c.Context(), user.ID.String())
 		if err != nil {

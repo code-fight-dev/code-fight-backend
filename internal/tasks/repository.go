@@ -51,6 +51,8 @@ type challengeRow struct {
 	Languages           []string
 	AcceptedSubmissions int
 	TotalSubmissions    int
+	UserSolved          bool
+	UserSubmissions     int
 }
 
 type languageVersionRow struct {
@@ -59,7 +61,53 @@ type languageVersionRow struct {
 }
 
 func (r *Repository) ListChallenges(ctx context.Context) ([]ChallengeListItem, error) {
-	const q = `
+	return r.listChallenges(ctx, "")
+}
+
+func (r *Repository) ListChallengesForUser(
+	ctx context.Context,
+	userID string,
+) ([]ChallengeListItem, error) {
+	normalizedUserID := strings.TrimSpace(userID)
+	if normalizedUserID == "" {
+		return r.ListChallenges(ctx)
+	}
+
+	return r.listChallenges(ctx, normalizedUserID)
+}
+
+func (r *Repository) listChallenges(
+	ctx context.Context,
+	userID string,
+) ([]ChallengeListItem, error) {
+	userProgressSelect := `
+	false as user_solved,
+	0::int as user_submissions
+`
+	userProgressJoin := ""
+	userProgressGroupBy := ""
+	args := make([]any, 0, 1)
+
+	if userID != "" {
+		userProgressSelect = `
+	coalesce(user_progress.solved, false) as user_solved,
+	coalesce(user_progress.total_submissions, 0)::int as user_submissions
+`
+		userProgressJoin = `
+left join lateral (
+	select
+		bool_or(s.status = 'finished' and s.verdict = 'accepted') as solved,
+		count(*)::int as total_submissions
+	from submissions s
+	where s.task_id = t.id
+	  and s.user_id = $1
+) user_progress on true
+`
+		userProgressGroupBy = ", user_progress.solved, user_progress.total_submissions"
+		args = append(args, userID)
+	}
+
+	q := fmt.Sprintf(`
 select
 	t.id::text,
 	t.slug,
@@ -72,7 +120,8 @@ select
 		array[]::text[]
 	),
 	coalesce(stats.accepted_submissions, 0)::int,
-	coalesce(stats.total_submissions, 0)::int
+	coalesce(stats.total_submissions, 0)::int,
+	%s
 from tasks t
 left join task_languages tl on tl.task_id = t.id
 left join lateral (
@@ -85,12 +134,13 @@ left join lateral (
 	from submissions s
 	where s.task_id = t.id
 ) stats on true
+%s
 where t.is_active = true
-group by t.id, stats.accepted_submissions, stats.total_submissions
-order by t.created_at desc
-`
+group by t.id, stats.accepted_submissions, stats.total_submissions%s
+	order by t.created_at desc
+`, userProgressSelect, userProgressJoin, userProgressGroupBy)
 
-	rows, err := r.db.Query(ctx, q)
+	rows, err := r.db.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +155,10 @@ order by t.created_at desc
 		}
 
 		payload := decodePayload(row.PayloadRaw)
+		progress := payloadProgress(payload)
+		if userID != "" {
+			progress = resolveUserProgress(progress, row.UserSolved, row.UserSubmissions)
+		}
 
 		item := ChallengeListItem{
 			ID:                 payloadID(payload, row.Slug),
@@ -122,7 +176,7 @@ order by t.created_at desc
 			Attempts:           row.TotalSubmissions,
 			Popularity:         payload.Popularity,
 			CreatedAt:          payloadCreatedAt(payload, row.CreatedAt),
-			Progress:           payloadProgress(payload),
+			Progress:           progress,
 		}
 
 		items = append(items, item)
@@ -515,6 +569,8 @@ func scanChallengeRow(row interface {
 		&out.Languages,
 		&out.AcceptedSubmissions,
 		&out.TotalSubmissions,
+		&out.UserSolved,
+		&out.UserSubmissions,
 	)
 	if err != nil {
 		return challengeRow{}, err
@@ -615,6 +671,26 @@ func payloadProgress(payload challengePayload) string {
 		return "not-started"
 	}
 	return progress
+}
+
+func resolveUserProgress(
+	payloadProgressValue string,
+	userSolved bool,
+	userSubmissions int,
+) string {
+	if userSolved {
+		return "solved"
+	}
+
+	if userSubmissions > 0 {
+		return "in-progress"
+	}
+
+	if strings.TrimSpace(payloadProgressValue) == "locked" {
+		return "locked"
+	}
+
+	return "not-started"
 }
 
 func payloadCreatedAt(payload challengePayload, fallback time.Time) string {

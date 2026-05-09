@@ -41,6 +41,27 @@ func (s *Service) ListChallenges(ctx context.Context) ([]ChallengeListItem, erro
 	return items, nil
 }
 
+func (s *Service) ListChallengesForUser(
+	ctx context.Context,
+	userID string,
+) ([]ChallengeListItem, error) {
+	items, err := s.repo.ListChallengesForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	capabilities, err := s.judgeCapabilities(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range items {
+		items[i].SupportedLanguages = capabilities.filterLanguages(items[i].SupportedLanguages)
+	}
+
+	return items, nil
+}
+
 func (s *Service) GetUserTaskStats(ctx context.Context, userID string) (UserTaskStats, error) {
 	return s.repo.GetUserTaskStats(ctx, userID)
 }
