@@ -518,7 +518,8 @@ from task_test_cases
 where task_id = $1
   and is_active = true
   and kind = 'sample'
-order by order_no asc
+order by random()
+limit 2
 `
 
 	rows, err := r.db.Query(ctx, q, taskID)
@@ -543,6 +544,7 @@ order by order_no asc
 			Name:           fmt.Sprintf("Case %d", displayNo),
 			Input:          input,
 			ExpectedOutput: expected,
+			Status:         "sample",
 		})
 	}
 

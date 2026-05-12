@@ -40,8 +40,16 @@ type Repository interface {
 	MarkRunning(ctx context.Context, submissionID, judgeStatus string, startedAt *time.Time) error
 	Complete(ctx context.Context, submissionID string, input CompleteInput, tests []SubmissionTestResult) error
 
+	CreateCodeRun(ctx context.Context, run *CodeRun) error
+	GetCodeRunByID(ctx context.Context, id string) (*CodeRun, []CodeRunTestResult, error)
+	GetCodeRunByJudgeSubmissionID(ctx context.Context, judgeSubmissionID string) (*CodeRun, error)
+	MarkCodeRunSentToJudge(ctx context.Context, codeRunID, judgeSubmissionID, judgeStatus string) error
+	MarkCodeRunRunning(ctx context.Context, codeRunID, judgeStatus string, startedAt *time.Time) error
+	CompleteCodeRun(ctx context.Context, codeRunID string, input CompleteInput, tests []CodeRunTestResult) error
+
 	GetJudgeTaskLimits(ctx context.Context, taskID string) (*JudgeTaskLimits, error)
 	ListJudgeTaskTestCases(ctx context.Context, taskID string) ([]JudgeTaskTestCase, error)
+	ListJudgeTaskSampleTestCases(ctx context.Context, taskID string) ([]JudgeTaskTestCase, error)
 }
 
 type PGRepository struct {
@@ -87,6 +95,32 @@ insert into submissions (
 		s.PassedTests, s.TotalTests, s.CompileTimeMs, s.RunTimeMs, s.PeakMemoryKb,
 		s.Score, s.ExitCode, s.CompileLog, s.StdoutTruncated, s.StderrTruncated,
 		s.CreatedAt, s.StartedAt, s.FinishedAt, s.UpdatedAt,
+	)
+	return err
+}
+
+func (r *PGRepository) CreateCodeRun(ctx context.Context, run *CodeRun) error {
+	const q = `
+insert into code_runs (
+    id, task_id, user_id, language, language_version, source_code,
+    status, verdict, judge_submission_id, judge_status, error_message,
+    passed_tests, total_tests, compile_time_ms, run_time_ms, peak_memory_kb,
+    score, exit_code, compile_log, stdout_truncated, stderr_truncated,
+    created_at, started_at, finished_at, updated_at
+) values (
+    $1, $2, $3, $4, $5, $6,
+    $7, $8, $9, $10, $11,
+    $12, $13, $14, $15, $16,
+    $17, $18, $19, $20, $21,
+    $22, $23, $24, $25
+)`
+
+	_, err := r.db.Exec(ctx, q,
+		run.ID, run.TaskID, run.UserID, run.Language, run.LanguageVersion, run.SourceCode,
+		run.Status, run.Verdict, run.JudgeSubmissionID, run.JudgeStatus, run.ErrorMessage,
+		run.PassedTests, run.TotalTests, run.CompileTimeMs, run.RunTimeMs, run.PeakMemoryKb,
+		run.Score, run.ExitCode, run.CompileLog, run.StdoutTruncated, run.StderrTruncated,
+		run.CreatedAt, run.StartedAt, run.FinishedAt, run.UpdatedAt,
 	)
 	return err
 }
@@ -142,6 +176,59 @@ order by created_at asc`
 	return sub, tests, nil
 }
 
+func (r *PGRepository) GetCodeRunByID(ctx context.Context, id string) (*CodeRun, []CodeRunTestResult, error) {
+	run, err := r.getCodeRunRow(ctx, r.db, `select
+    id, task_id, user_id, language, language_version, source_code,
+    status, verdict, judge_submission_id, judge_status, error_message,
+    passed_tests, total_tests, compile_time_ms, run_time_ms, peak_memory_kb,
+    score, exit_code, compile_log, stdout_truncated, stderr_truncated,
+    created_at, started_at, finished_at, updated_at
+from code_runs
+where id = $1`, id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	const tq = `
+select id, code_run_id, test_case_id, test_name, is_custom, status, time_ms, memory_kb, exit_code, checker_message, created_at
+from code_run_test_results
+where code_run_id = $1
+order by created_at asc`
+
+	rows, err := r.db.Query(ctx, tq, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	var tests []CodeRunTestResult
+	for rows.Next() {
+		var t CodeRunTestResult
+		if err := rows.Scan(
+			&t.ID,
+			&t.CodeRunID,
+			&t.TestCaseID,
+			&t.TestName,
+			&t.IsCustom,
+			&t.Status,
+			&t.TimeMs,
+			&t.MemoryKb,
+			&t.ExitCode,
+			&t.CheckerMessage,
+			&t.CreatedAt,
+		); err != nil {
+			return nil, nil, err
+		}
+		tests = append(tests, t)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	return run, tests, nil
+}
+
 func (r *PGRepository) GetByJudgeSubmissionID(ctx context.Context, judgeSubmissionID string) (*Submission, error) {
 	return r.getSubmissionRow(ctx, r.db, `select
     id, match_id, task_id, user_id, language, language_version, source_code,
@@ -150,6 +237,17 @@ func (r *PGRepository) GetByJudgeSubmissionID(ctx context.Context, judgeSubmissi
     score, exit_code, compile_log, stdout_truncated, stderr_truncated,
     created_at, started_at, finished_at, updated_at
 from submissions
+where judge_submission_id = $1`, judgeSubmissionID)
+}
+
+func (r *PGRepository) GetCodeRunByJudgeSubmissionID(ctx context.Context, judgeSubmissionID string) (*CodeRun, error) {
+	return r.getCodeRunRow(ctx, r.db, `select
+    id, task_id, user_id, language, language_version, source_code,
+    status, verdict, judge_submission_id, judge_status, error_message,
+    passed_tests, total_tests, compile_time_ms, run_time_ms, peak_memory_kb,
+    score, exit_code, compile_log, stdout_truncated, stderr_truncated,
+    created_at, started_at, finished_at, updated_at
+from code_runs
 where judge_submission_id = $1`, judgeSubmissionID)
 }
 
@@ -164,6 +262,26 @@ set
 where id = $1`
 
 	ct, err := r.db.Exec(ctx, q, submissionID, judgeSubmissionID, judgeStatus)
+	if err != nil {
+		return mapPQError(err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrSubmissionNotFound
+	}
+	return nil
+}
+
+func (r *PGRepository) MarkCodeRunSentToJudge(ctx context.Context, codeRunID, judgeSubmissionID, judgeStatus string) error {
+	const q = `
+update code_runs
+set
+    status = 'sent_to_judge',
+    judge_submission_id = $2,
+    judge_status = $3,
+    updated_at = now()
+where id = $1`
+
+	ct, err := r.db.Exec(ctx, q, codeRunID, judgeSubmissionID, judgeStatus)
 	if err != nil {
 		return mapPQError(err)
 	}
@@ -257,6 +375,90 @@ insert into submission_test_results (
 	return tx.Commit(ctx)
 }
 
+func (r *PGRepository) CompleteCodeRun(ctx context.Context, codeRunID string, input CompleteInput, tests []CodeRunTestResult) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	const uq = `
+update code_runs
+set
+    status = $2,
+    judge_status = $3,
+    verdict = $4,
+    error_message = $5,
+    passed_tests = $6,
+    total_tests = $7,
+    compile_time_ms = $8,
+    run_time_ms = $9,
+    peak_memory_kb = $10,
+    score = $11,
+    exit_code = $12,
+    compile_log = $13,
+    stdout_truncated = $14,
+    stderr_truncated = $15,
+    started_at = $16,
+    finished_at = $17,
+    updated_at = now()
+where id = $1`
+
+	ct, err := tx.Exec(ctx, uq,
+		codeRunID,
+		input.Status,
+		input.JudgeStatus,
+		input.Verdict,
+		input.ErrorMessage,
+		input.PassedTests,
+		input.TotalTests,
+		input.CompileTimeMs,
+		input.RunTimeMs,
+		input.PeakMemoryKb,
+		input.Score,
+		input.ExitCode,
+		input.CompileLog,
+		input.StdoutTruncated,
+		input.StderrTruncated,
+		input.StartedAt,
+		input.FinishedAt,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrSubmissionNotFound
+	}
+
+	if _, err := tx.Exec(ctx, `delete from code_run_test_results where code_run_id = $1`, codeRunID); err != nil {
+		return err
+	}
+
+	if len(tests) > 0 {
+		const iq = `
+insert into code_run_test_results (
+    id, code_run_id, test_case_id, test_name, is_custom, status, time_ms, memory_kb, exit_code, checker_message, created_at
+) values (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+)`
+		for _, t := range tests {
+			if t.ID == "" {
+				t.ID = uuid.NewString()
+			}
+			if t.CreatedAt.IsZero() {
+				t.CreatedAt = time.Now().UTC()
+			}
+			if _, err := tx.Exec(ctx, iq,
+				t.ID, t.CodeRunID, t.TestCaseID, t.TestName, t.IsCustom, t.Status, t.TimeMs, t.MemoryKb, t.ExitCode, t.CheckerMessage, t.CreatedAt,
+			); err != nil {
+				return err
+			}
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
 func (r *PGRepository) getSubmissionRow(ctx context.Context, q querier, sql string, arg any) (*Submission, error) {
 	var s Submission
 	err := q.QueryRow(ctx, sql, arg).Scan(
@@ -296,6 +498,44 @@ func (r *PGRepository) getSubmissionRow(ctx context.Context, q querier, sql stri
 	return &s, nil
 }
 
+func (r *PGRepository) getCodeRunRow(ctx context.Context, q querier, sql string, arg any) (*CodeRun, error) {
+	var run CodeRun
+	err := q.QueryRow(ctx, sql, arg).Scan(
+		&run.ID,
+		&run.TaskID,
+		&run.UserID,
+		&run.Language,
+		&run.LanguageVersion,
+		&run.SourceCode,
+		&run.Status,
+		&run.Verdict,
+		&run.JudgeSubmissionID,
+		&run.JudgeStatus,
+		&run.ErrorMessage,
+		&run.PassedTests,
+		&run.TotalTests,
+		&run.CompileTimeMs,
+		&run.RunTimeMs,
+		&run.PeakMemoryKb,
+		&run.Score,
+		&run.ExitCode,
+		&run.CompileLog,
+		&run.StdoutTruncated,
+		&run.StderrTruncated,
+		&run.CreatedAt,
+		&run.StartedAt,
+		&run.FinishedAt,
+		&run.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrSubmissionNotFound
+		}
+		return nil, err
+	}
+	return &run, nil
+}
+
 func (r *PGRepository) GetJudgeTaskLimits(ctx context.Context, taskID string) (*JudgeTaskLimits, error) {
 	var out JudgeTaskLimits
 
@@ -328,6 +568,50 @@ func (r *PGRepository) ListJudgeTaskTestCases(ctx context.Context, taskID string
 		from task_test_cases
 		where task_id = $1
 		  and is_active = true
+		order by order_no asc
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tests []JudgeTaskTestCase
+
+	for rows.Next() {
+		var t JudgeTaskTestCase
+
+		if err := rows.Scan(
+			&t.ID,
+			&t.OrderNo,
+			&t.InputBlobRef,
+			&t.ExpectedBlobRef,
+			&t.Weight,
+		); err != nil {
+			return nil, err
+		}
+
+		tests = append(tests, t)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tests, nil
+}
+
+func (r *PGRepository) ListJudgeTaskSampleTestCases(ctx context.Context, taskID string) ([]JudgeTaskTestCase, error) {
+	rows, err := r.db.Query(ctx, `
+		select
+			id,
+			order_no,
+			input_blob_ref,
+			expected_blob_ref,
+			weight
+		from task_test_cases
+		where task_id = $1
+		  and is_active = true
+		  and kind = 'sample'
 		order by order_no asc
 	`, taskID)
 	if err != nil {
@@ -403,6 +687,27 @@ where id = $1
   and status not in ('finished', 'failed')`
 
 	ct, err := r.db.Exec(ctx, q, submissionID, judgeStatus, startedAt)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return nil
+	}
+	return nil
+}
+
+func (r *PGRepository) MarkCodeRunRunning(ctx context.Context, codeRunID, judgeStatus string, startedAt *time.Time) error {
+	const q = `
+update code_runs
+set
+    status = 'running',
+    judge_status = $2,
+    started_at = coalesce(started_at, $3, now()),
+    updated_at = now()
+where id = $1
+  and status not in ('finished', 'failed')`
+
+	ct, err := r.db.Exec(ctx, q, codeRunID, judgeStatus, startedAt)
 	if err != nil {
 		return err
 	}

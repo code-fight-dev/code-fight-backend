@@ -106,6 +106,9 @@ func submissionLimiterScope(path string) (string, bool) {
 	if len(parts) == 4 && parts[0] == "api" && parts[1] == "tasks" && parts[3] == "submissions" {
 		return "task:" + parts[2], true
 	}
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "tasks" && parts[3] == "runs" {
+		return "task-run:" + parts[2], true
+	}
 	if len(parts) == 4 && parts[0] == "api" && parts[1] == "matches" && parts[3] == "submissions" {
 		return "match:" + parts[2], true
 	}
