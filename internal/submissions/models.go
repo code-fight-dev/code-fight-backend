@@ -74,7 +74,9 @@ type CodeRun struct {
 type CodeRunTestResult struct {
 	ID             string
 	CodeRunID      string
-	TestCaseID     string
+	TestCaseID     *string
+	TestName       *string
+	IsCustom       bool
 	Status         string
 	TimeMs         *int
 	MemoryKb       *int

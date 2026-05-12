@@ -330,26 +330,26 @@ group by t.id
 	}
 
 	out := &Challenge{
-		ID:                    payloadID(payload, challengeRowValue.Slug),
-		TaskID:                challengeRowValue.TaskID,
-		Slug:                  challengeRowValue.Slug,
-		Title:                 fallbackString(payload.Title, challengeRowValue.Title),
-		Difficulty:            toFrontendDifficulty(challengeRowValue.Difficulty),
-		Summary:               payload.Summary,
-		Description:           payload.Description,
-		Examples:              payload.Examples,
-		Constraints:           payload.Constraints,
-		Notes:                 payload.Notes,
-		Tags:                  payload.Tags,
-		Category:              payload.Category,
-		Kind:                  payloadKind(payload),
-		SupportedLanguages:    normalizeLanguages(payloadLanguagesAllowedByTask(payload, languages)),
-		LanguageVersions:      versions,
-		StarterCodeByLanguage: payload.StarterCodeByLanguage,
-		AcceptanceRate:        acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
-		EstimatedMinutes:      payload.EstimatedMinutes,
-		Attempts:              challengeRowValue.TotalSubmissions,
-		Popularity:            payload.Popularity,
+		ID:                     payloadID(payload, challengeRowValue.Slug),
+		TaskID:                 challengeRowValue.TaskID,
+		Slug:                   challengeRowValue.Slug,
+		Title:                  fallbackString(payload.Title, challengeRowValue.Title),
+		Difficulty:             toFrontendDifficulty(challengeRowValue.Difficulty),
+		Summary:                payload.Summary,
+		Description:            payload.Description,
+		Examples:               payload.Examples,
+		Constraints:            payload.Constraints,
+		Notes:                  payload.Notes,
+		Tags:                   payload.Tags,
+		Category:               payload.Category,
+		Kind:                   payloadKind(payload),
+		SupportedLanguages:     normalizeLanguages(payloadLanguagesAllowedByTask(payload, languages)),
+		LanguageVersions:       versions,
+		StarterCodeByLanguage:  payload.StarterCodeByLanguage,
+		AcceptanceRate:         acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
+		EstimatedMinutes:       payload.EstimatedMinutes,
+		Attempts:               challengeRowValue.TotalSubmissions,
+		Popularity:             payload.Popularity,
 		AcceptedSubmissions:    challengeRowValue.AcceptedSubmissions,
 		AcceptedSubmissionRate: acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
 		TotalSubmissions:       challengeRowValue.TotalSubmissions,
@@ -416,7 +416,8 @@ from task_test_cases
 where task_id = $1
   and is_active = true
   and kind = 'sample'
-order by order_no asc
+order by random()
+limit 2
 `
 
 	rows, err := r.db.Query(ctx, q, taskID)
@@ -441,6 +442,7 @@ order by order_no asc
 			Name:           fmt.Sprintf("Case %d", displayNo),
 			Input:          input,
 			ExpectedOutput: expected,
+			Status:         "sample",
 		})
 	}
 

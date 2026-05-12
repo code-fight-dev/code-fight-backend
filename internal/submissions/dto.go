@@ -7,9 +7,16 @@ type CreateSubmissionRequest struct {
 }
 
 type CreateCodeRunRequest struct {
-	Language        string `json:"language"`
-	LanguageVersion string `json:"language_version"`
-	SourceCode      string `json:"source_code"`
+	Language        string                    `json:"language"`
+	LanguageVersion string                    `json:"language_version"`
+	SourceCode      string                    `json:"source_code"`
+	CustomTest      *CodeRunCustomTestRequest `json:"custom_test,omitempty"`
+}
+
+type CodeRunCustomTestRequest struct {
+	Name           string  `json:"name,omitempty"`
+	Input          string  `json:"input"`
+	ExpectedOutput *string `json:"expected_output,omitempty"`
 }
 
 type SubmissionTestResultDTO struct {
@@ -22,7 +29,9 @@ type SubmissionTestResultDTO struct {
 }
 
 type CodeRunTestResultDTO struct {
-	TestCaseID     string  `json:"test_case_id"`
+	TestCaseID     *string `json:"test_case_id,omitempty"`
+	TestName       *string `json:"test_name,omitempty"`
+	IsCustom       bool    `json:"is_custom"`
 	Status         string  `json:"status"`
 	TimeMs         *int    `json:"time_ms,omitempty"`
 	MemoryKb       *int    `json:"memory_kb,omitempty"`
@@ -177,6 +186,8 @@ func ToCodeRunResponse(run *CodeRun, tests []CodeRunTestResult) CodeRunResponse 
 	for _, t := range tests {
 		resp.TestResults = append(resp.TestResults, CodeRunTestResultDTO{
 			TestCaseID:     t.TestCaseID,
+			TestName:       t.TestName,
+			IsCustom:       t.IsCustom,
 			Status:         t.Status,
 			TimeMs:         t.TimeMs,
 			MemoryKb:       t.MemoryKb,

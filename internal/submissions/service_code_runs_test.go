@@ -103,6 +103,88 @@ func TestCreateTaskCodeRunSendsOnlySampleTestsToJudge(t *testing.T) {
 	}
 }
 
+func TestCreateTaskCodeRunCombinesSampleAndCustomTest(t *testing.T) {
+	ctx := context.Background()
+	taskID := uuid.New()
+	userID := uuid.New()
+	expectedOutput := "custom out\n"
+
+	repo := &fakeCodeRunRepo{
+		limits: &JudgeTaskLimits{
+			TimeLimitMS:   1500,
+			MemoryLimitKB: 131072,
+		},
+		sampleTests: []JudgeTaskTestCase{
+			{
+				ID:              uuid.NewString(),
+				OrderNo:         1,
+				InputBlobRef:    "sample in\n",
+				ExpectedBlobRef: "sample out\n",
+				Weight:          1,
+			},
+		},
+	}
+	taskRepo := &fakeTaskRepo{
+		task:    &Task{ID: taskID, IsActive: true},
+		allowed: true,
+	}
+	judgeClient := &fakeJudgeClient{
+		supported: []judge.SupportedLanguage{{Language: "go", Version: "1.24"}},
+		submitResponse: &judge.SubmitResponse{
+			JudgeSubmissionID: "judge-run-2",
+			Status:            judge.StatusQueued,
+		},
+	}
+
+	service := NewService(
+		repo,
+		taskRepo,
+		nil,
+		judgeClient,
+		nil,
+		"http://backend/internal/judge/callback",
+		"callback-token",
+		1024*1024,
+	)
+
+	_, err := service.CreateTaskCodeRun(ctx, userID, taskID, CreateCodeRunRequest{
+		Language:        "go",
+		LanguageVersion: "1.24",
+		SourceCode:      "package main\nfunc main() {}\n",
+		CustomTest: &CodeRunCustomTestRequest{
+			Input:          "custom in\n",
+			ExpectedOutput: &expectedOutput,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTaskCodeRun returned error: %v", err)
+	}
+
+	if len(judgeClient.submits) != 1 {
+		t.Fatalf("judge submits = %d, want 1", len(judgeClient.submits))
+	}
+
+	tests := judgeClient.submits[0].Tests
+	if len(tests) != 2 {
+		t.Fatalf("judge tests = %d, want sample + custom", len(tests))
+	}
+	if tests[0].ID != repo.sampleTests[0].ID {
+		t.Fatalf("first judge test id = %q, want sample id %q", tests[0].ID, repo.sampleTests[0].ID)
+	}
+	if tests[1].ID != customCodeRunTestID {
+		t.Fatalf("second judge test id = %q, want custom", tests[1].ID)
+	}
+	if tests[1].Input != "custom in\n" {
+		t.Fatalf("custom input = %q", tests[1].Input)
+	}
+	if tests[1].ExpectedOutput != expectedOutput {
+		t.Fatalf("custom expected output = %q", tests[1].ExpectedOutput)
+	}
+	if tests[1].SkipOutputCheck {
+		t.Fatalf("custom test with expected output should not skip output check")
+	}
+}
+
 type fakeTaskRepo struct {
 	task    *Task
 	allowed bool

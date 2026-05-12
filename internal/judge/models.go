@@ -41,10 +41,11 @@ type SubmitLimits struct {
 }
 
 type SubmitTest struct {
-	ID             string `json:"id"`
-	Input          string `json:"input"`
-	ExpectedOutput string `json:"expected_output"`
-	Points         int    `json:"points"`
+	ID              string `json:"id"`
+	Input           string `json:"input"`
+	ExpectedOutput  string `json:"expected_output"`
+	Points          int    `json:"points"`
+	SkipOutputCheck bool   `json:"skip_output_check,omitempty"`
 }
 
 type SubmitResponse struct {

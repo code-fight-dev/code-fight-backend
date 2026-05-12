@@ -190,7 +190,7 @@ where id = $1`, id)
 	}
 
 	const tq = `
-select id, code_run_id, test_case_id, status, time_ms, memory_kb, exit_code, checker_message, created_at
+select id, code_run_id, test_case_id, test_name, is_custom, status, time_ms, memory_kb, exit_code, checker_message, created_at
 from code_run_test_results
 where code_run_id = $1
 order by created_at asc`
@@ -208,6 +208,8 @@ order by created_at asc`
 			&t.ID,
 			&t.CodeRunID,
 			&t.TestCaseID,
+			&t.TestName,
+			&t.IsCustom,
 			&t.Status,
 			&t.TimeMs,
 			&t.MemoryKb,
@@ -435,9 +437,9 @@ where id = $1`
 	if len(tests) > 0 {
 		const iq = `
 insert into code_run_test_results (
-    id, code_run_id, test_case_id, status, time_ms, memory_kb, exit_code, checker_message, created_at
+    id, code_run_id, test_case_id, test_name, is_custom, status, time_ms, memory_kb, exit_code, checker_message, created_at
 ) values (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )`
 		for _, t := range tests {
 			if t.ID == "" {
@@ -447,7 +449,7 @@ insert into code_run_test_results (
 				t.CreatedAt = time.Now().UTC()
 			}
 			if _, err := tx.Exec(ctx, iq,
-				t.ID, t.CodeRunID, t.TestCaseID, t.Status, t.TimeMs, t.MemoryKb, t.ExitCode, t.CheckerMessage, t.CreatedAt,
+				t.ID, t.CodeRunID, t.TestCaseID, t.TestName, t.IsCustom, t.Status, t.TimeMs, t.MemoryKb, t.ExitCode, t.CheckerMessage, t.CreatedAt,
 			); err != nil {
 				return err
 			}

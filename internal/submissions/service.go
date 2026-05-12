@@ -13,6 +13,8 @@ import (
 	"code-fight-backend/internal/matches"
 )
 
+const customCodeRunTestID = "custom"
+
 type Task struct {
 	ID       uuid.UUID
 	IsActive bool
@@ -187,7 +189,7 @@ func (s *Service) CreateTaskCodeRun(
 		return nil, err
 	}
 
-	if err := s.sendCodeRunToJudge(ctx, run); err != nil {
+	if err := s.sendCodeRunToJudge(ctx, run, input); err != nil {
 		return nil, err
 	}
 
@@ -426,10 +428,13 @@ func (s *Service) HandleCodeRunJudgeCallback(ctx context.Context, payload judge.
 	now := time.Now().UTC()
 
 	for _, t := range payload.Tests {
+		testCaseID, testName, isCustom := codeRunResultTestIdentity(t.TestCaseID)
 		tests = append(tests, CodeRunTestResult{
 			ID:             uuid.NewString(),
 			CodeRunID:      run.ID,
-			TestCaseID:     t.TestCaseID,
+			TestCaseID:     testCaseID,
+			TestName:       testName,
+			IsCustom:       isCustom,
 			Status:         t.Status,
 			TimeMs:         t.TimeMs,
 			MemoryKb:       t.MemoryKb,
@@ -498,10 +503,13 @@ func (s *Service) validateJudgeCallback(ctx context.Context, sub *Submission, pa
 	}
 
 	for _, test := range payload.Tests {
-		if _, ok := allowed[test.TestCaseID]; !ok {
+		if !isAllowedTestStatus(test.Status) {
 			return ErrJudgeCallbackUnauthorized
 		}
-		if !isAllowedTestStatus(test.Status) {
+		if isCustomCodeRunTestID(test.TestCaseID) {
+			continue
+		}
+		if _, ok := allowed[test.TestCaseID]; !ok {
 			return ErrJudgeCallbackUnauthorized
 		}
 	}
@@ -608,11 +616,29 @@ func (s *Service) validateInput(input CreateSubmissionRequest) error {
 }
 
 func (s *Service) validateCodeRunInput(input CreateCodeRunRequest) error {
-	return s.validateInput(CreateSubmissionRequest{
+	if err := s.validateInput(CreateSubmissionRequest{
 		Language:        input.Language,
 		LanguageVersion: input.LanguageVersion,
 		SourceCode:      input.SourceCode,
-	})
+	}); err != nil {
+		return err
+	}
+
+	if input.CustomTest == nil {
+		return nil
+	}
+
+	if s.maxSourceBytes > 0 {
+		size := len(input.CustomTest.Input)
+		if input.CustomTest.ExpectedOutput != nil {
+			size += len(*input.CustomTest.ExpectedOutput)
+		}
+		if size > s.maxSourceBytes {
+			return ErrInvalidSourceCode
+		}
+	}
+
+	return nil
 }
 
 func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
@@ -688,7 +714,7 @@ func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 	return nil
 }
 
-func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun) error {
+func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun, input CreateCodeRunRequest) error {
 	limits, err := s.repo.GetJudgeTaskLimits(ctx, run.TaskID)
 	if err != nil {
 		return fmt.Errorf("get judge task limits: %w", err)
@@ -697,10 +723,6 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun) error {
 	taskTests, err := s.repo.ListJudgeTaskSampleTestCases(ctx, run.TaskID)
 	if err != nil {
 		return fmt.Errorf("list judge task sample test cases: %w", err)
-	}
-
-	if len(taskTests) == 0 {
-		return fmt.Errorf("task has no active sample test cases")
 	}
 
 	timeMS := limits.TimeLimitMS
@@ -713,7 +735,7 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun) error {
 		memoryMB = 256
 	}
 
-	judgeTests := make([]judge.SubmitTest, 0, len(taskTests))
+	judgeTests := make([]judge.SubmitTest, 0, len(taskTests)+1)
 
 	for _, test := range taskTests {
 		points := test.Weight
@@ -727,6 +749,27 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun) error {
 			ExpectedOutput: test.ExpectedBlobRef,
 			Points:         points,
 		})
+	}
+
+	if input.CustomTest != nil {
+		expectedOutput := ""
+		skipOutputCheck := true
+		if input.CustomTest.ExpectedOutput != nil {
+			expectedOutput = *input.CustomTest.ExpectedOutput
+			skipOutputCheck = false
+		}
+
+		judgeTests = append(judgeTests, judge.SubmitTest{
+			ID:              customCodeRunTestID,
+			Input:           input.CustomTest.Input,
+			ExpectedOutput:  expectedOutput,
+			Points:          0,
+			SkipOutputCheck: skipOutputCheck,
+		})
+	}
+
+	if len(judgeTests) == 0 {
+		return fmt.Errorf("task has no active sample test cases")
 	}
 
 	resp, err := s.judgeClient.Submit(ctx, judge.SubmitRequest{
@@ -754,6 +797,24 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun) error {
 	}
 
 	return nil
+}
+
+func isCustomCodeRunTestID(testID string) bool {
+	return strings.TrimSpace(testID) == customCodeRunTestID
+}
+
+func codeRunResultTestIdentity(testID string) (*string, *string, bool) {
+	if isCustomCodeRunTestID(testID) {
+		name := "Custom test"
+		return nil, &name, true
+	}
+
+	cleaned := strings.TrimSpace(testID)
+	if cleaned == "" {
+		return nil, nil, false
+	}
+
+	return &cleaned, nil, false
 }
 
 func (s *Service) isJudgeLanguageSupported(ctx context.Context, language, version string) (bool, error) {
