@@ -2,6 +2,7 @@ package submissions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -129,6 +130,71 @@ func (s *Service) CreateTaskSubmission(
 	return full, err
 }
 
+func (s *Service) CreateTaskCodeRun(
+	ctx context.Context,
+	userID uuid.UUID,
+	taskID uuid.UUID,
+	input CreateCodeRunRequest,
+) (*CodeRun, error) {
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, ErrTaskNotFound
+	}
+	if !task.IsActive {
+		return nil, ErrTaskInactive
+	}
+
+	if err := s.validateCodeRunInput(input); err != nil {
+		return nil, err
+	}
+
+	allowed, err := s.taskRepo.IsLanguageAllowed(ctx, taskID, input.Language, input.LanguageVersion)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, ErrTaskLanguageNotAllowed
+	}
+
+	supported, err := s.isJudgeLanguageSupported(ctx, input.Language, input.LanguageVersion)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)
+	}
+	if !supported {
+		return nil, ErrTaskLanguageNotAllowed
+	}
+
+	now := time.Now().UTC()
+	run := &CodeRun{
+		ID:              uuid.NewString(),
+		TaskID:          taskID.String(),
+		UserID:          userID.String(),
+		Language:        strings.TrimSpace(input.Language),
+		LanguageVersion: strings.TrimSpace(input.LanguageVersion),
+		SourceCode:      input.SourceCode,
+		Status:          StatusQueued,
+		PassedTests:     0,
+		TotalTests:      0,
+		Score:           0,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+
+	if err := s.repo.CreateCodeRun(ctx, run); err != nil {
+		return nil, err
+	}
+
+	if err := s.sendCodeRunToJudge(ctx, run); err != nil {
+		return nil, err
+	}
+
+	full, _, err := s.repo.GetCodeRunByID(ctx, run.ID)
+	return full, err
+}
+
 func (s *Service) CreateMatchSubmission(
 	ctx context.Context,
 	userID uuid.UUID,
@@ -241,9 +307,25 @@ func (s *Service) GetByIDForUser(ctx context.Context, submissionID string, userI
 	return sub, tests, nil
 }
 
+func (s *Service) GetCodeRunByIDForUser(ctx context.Context, codeRunID string, userID uuid.UUID) (*CodeRun, []CodeRunTestResult, error) {
+	run, tests, err := s.repo.GetCodeRunByID(ctx, codeRunID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if run.UserID != userID.String() {
+		return nil, nil, ErrSubmissionNotFound
+	}
+
+	return run, tests, nil
+}
+
 func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.CallbackPayload) error {
 	sub, err := s.repo.GetByJudgeSubmissionID(ctx, payload.JudgeSubmissionID)
 	if err != nil {
+		if errors.Is(err, ErrSubmissionNotFound) {
+			return s.HandleCodeRunJudgeCallback(ctx, payload)
+		}
 		return err
 	}
 
@@ -317,6 +399,66 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 	return nil
 }
 
+func (s *Service) HandleCodeRunJudgeCallback(ctx context.Context, payload judge.CallbackPayload) error {
+	run, err := s.repo.GetCodeRunByJudgeSubmissionID(ctx, payload.JudgeSubmissionID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.validateCodeRunJudgeCallback(ctx, run, payload); err != nil {
+		return err
+	}
+
+	if run.Status == StatusFinished || run.Status == StatusFailed {
+		return nil
+	}
+
+	if payload.JudgeStatus == JudgeStatusRunning {
+		return s.repo.MarkCodeRunRunning(ctx, run.ID, payload.JudgeStatus, payload.StartedAt)
+	}
+
+	finalStatus := StatusFinished
+	if payload.JudgeStatus == JudgeStatusFailed || payload.Verdict == nil {
+		finalStatus = StatusFailed
+	}
+
+	tests := make([]CodeRunTestResult, 0, len(payload.Tests))
+	now := time.Now().UTC()
+
+	for _, t := range payload.Tests {
+		tests = append(tests, CodeRunTestResult{
+			ID:             uuid.NewString(),
+			CodeRunID:      run.ID,
+			TestCaseID:     t.TestCaseID,
+			Status:         t.Status,
+			TimeMs:         t.TimeMs,
+			MemoryKb:       t.MemoryKb,
+			ExitCode:       t.ExitCode,
+			CheckerMessage: t.CheckerMessage,
+			CreatedAt:      now,
+		})
+	}
+
+	return s.repo.CompleteCodeRun(ctx, run.ID, CompleteInput{
+		Status:          finalStatus,
+		JudgeStatus:     payload.JudgeStatus,
+		Verdict:         payload.Verdict,
+		ErrorMessage:    payload.ErrorMessage,
+		PassedTests:     payload.PassedTests,
+		TotalTests:      payload.TotalTests,
+		CompileTimeMs:   payload.CompileTimeMs,
+		RunTimeMs:       payload.RunTimeMs,
+		PeakMemoryKb:    payload.PeakMemoryKb,
+		Score:           payload.Score,
+		ExitCode:        payload.ExitCode,
+		CompileLog:      payload.CompileLog,
+		StdoutTruncated: payload.StdoutTruncated,
+		StderrTruncated: payload.StderrTruncated,
+		StartedAt:       payload.StartedAt,
+		FinishedAt:      payload.FinishedAt,
+	}, tests)
+}
+
 func (s *Service) validateJudgeCallback(ctx context.Context, sub *Submission, payload judge.CallbackPayload) error {
 	if payload.SubmissionID != sub.ID {
 		return ErrJudgeCallbackUnauthorized
@@ -346,6 +488,56 @@ func (s *Service) validateJudgeCallback(ctx context.Context, sub *Submission, pa
 	}
 
 	allowedTests, err := s.repo.ListJudgeTaskTestCases(ctx, sub.TaskID)
+	if err != nil {
+		return err
+	}
+
+	allowed := make(map[string]struct{}, len(allowedTests))
+	for _, test := range allowedTests {
+		allowed[test.ID] = struct{}{}
+	}
+
+	for _, test := range payload.Tests {
+		if _, ok := allowed[test.TestCaseID]; !ok {
+			return ErrJudgeCallbackUnauthorized
+		}
+		if !isAllowedTestStatus(test.Status) {
+			return ErrJudgeCallbackUnauthorized
+		}
+	}
+
+	return nil
+}
+
+func (s *Service) validateCodeRunJudgeCallback(ctx context.Context, run *CodeRun, payload judge.CallbackPayload) error {
+	if payload.SubmissionID != run.ID {
+		return ErrJudgeCallbackUnauthorized
+	}
+
+	switch payload.JudgeStatus {
+	case JudgeStatusRunning:
+		return nil
+	case JudgeStatusFinished, JudgeStatusFailed:
+	default:
+		return ErrJudgeCallbackUnauthorized
+	}
+
+	if payload.JudgeStatus == JudgeStatusFinished {
+		if payload.Verdict == nil || !isAllowedVerdict(*payload.Verdict) {
+			return ErrJudgeCallbackUnauthorized
+		}
+	} else if payload.Verdict != nil && !isAllowedVerdict(*payload.Verdict) {
+		return ErrJudgeCallbackUnauthorized
+	}
+
+	if payload.PassedTests < 0 || payload.TotalTests < 0 || payload.Score < 0 {
+		return ErrJudgeCallbackUnauthorized
+	}
+	if payload.PassedTests > payload.TotalTests {
+		return ErrJudgeCallbackUnauthorized
+	}
+
+	allowedTests, err := s.repo.ListJudgeTaskSampleTestCases(ctx, run.TaskID)
 	if err != nil {
 		return err
 	}
@@ -415,6 +607,14 @@ func (s *Service) validateInput(input CreateSubmissionRequest) error {
 	return nil
 }
 
+func (s *Service) validateCodeRunInput(input CreateCodeRunRequest) error {
+	return s.validateInput(CreateSubmissionRequest{
+		Language:        input.Language,
+		LanguageVersion: input.LanguageVersion,
+		SourceCode:      input.SourceCode,
+	})
+}
+
 func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 	limits, err := s.repo.GetJudgeTaskLimits(ctx, sub.TaskID)
 	if err != nil {
@@ -482,6 +682,74 @@ func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 	}
 
 	if err := s.repo.MarkSentToJudge(ctx, sub.ID, resp.JudgeSubmissionID, resp.Status); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun) error {
+	limits, err := s.repo.GetJudgeTaskLimits(ctx, run.TaskID)
+	if err != nil {
+		return fmt.Errorf("get judge task limits: %w", err)
+	}
+
+	taskTests, err := s.repo.ListJudgeTaskSampleTestCases(ctx, run.TaskID)
+	if err != nil {
+		return fmt.Errorf("list judge task sample test cases: %w", err)
+	}
+
+	if len(taskTests) == 0 {
+		return fmt.Errorf("task has no active sample test cases")
+	}
+
+	timeMS := limits.TimeLimitMS
+	if timeMS <= 0 {
+		timeMS = 5000
+	}
+
+	memoryMB := limits.MemoryLimitKB / 1024
+	if memoryMB <= 0 {
+		memoryMB = 256
+	}
+
+	judgeTests := make([]judge.SubmitTest, 0, len(taskTests))
+
+	for _, test := range taskTests {
+		points := test.Weight
+		if points <= 0 {
+			points = 1
+		}
+
+		judgeTests = append(judgeTests, judge.SubmitTest{
+			ID:             test.ID,
+			Input:          test.InputBlobRef,
+			ExpectedOutput: test.ExpectedBlobRef,
+			Points:         points,
+		})
+	}
+
+	resp, err := s.judgeClient.Submit(ctx, judge.SubmitRequest{
+		SubmissionID:    run.ID,
+		TaskID:          run.TaskID,
+		Language:        run.Language,
+		LanguageVersion: run.LanguageVersion,
+		SourceCode:      run.SourceCode,
+		CallbackURL:     s.callbackURL,
+		CallbackToken:   s.callbackToken,
+
+		Limits: judge.SubmitLimits{
+			TimeMS:   timeMS,
+			MemoryMB: memoryMB,
+			OutputKB: 64,
+		},
+		Tests: judgeTests,
+	})
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)
+	}
+
+	if err := s.repo.MarkCodeRunSentToJudge(ctx, run.ID, resp.JudgeSubmissionID, resp.Status); err != nil {
 		return err
 	}
 

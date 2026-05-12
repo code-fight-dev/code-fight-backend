@@ -25,8 +25,10 @@ func NewHandler(service *Service, callbackToken string) *Handler {
 
 func (h *Handler) RegisterRoutes(api fiber.Router, internal fiber.Router) {
 	api.Post("/tasks/:taskId/submissions", h.CreateTaskSubmission)
+	api.Post("/tasks/:taskId/runs", h.CreateTaskCodeRun)
 	api.Post("/matches/:matchId/submissions", h.CreateMatchSubmission)
 	api.Get("/submissions/:submissionId", h.GetSubmission)
+	api.Get("/code-runs/:codeRunId", h.GetCodeRun)
 
 	internal.Post("/judge/callback", h.JudgeCallback)
 }
@@ -89,6 +91,35 @@ func (h *Handler) CreateMatchSubmission(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(ToSubmissionResponse(full, tests))
 }
 
+func (h *Handler) CreateTaskCodeRun(c *fiber.Ctx) error {
+	userID, err := userIDFromCtx(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
+	}
+
+	taskID, err := uuid.Parse(c.Params("taskId"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid task id")
+	}
+
+	var req CreateCodeRunRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+	}
+
+	run, err := h.service.CreateTaskCodeRun(c.Context(), userID, taskID, req)
+	if err != nil {
+		return mapServiceError(err)
+	}
+
+	full, tests, err := h.service.GetCodeRunByIDForUser(c.Context(), run.ID, userID)
+	if err != nil {
+		return mapServiceError(err)
+	}
+
+	return c.Status(fiber.StatusAccepted).JSON(ToCodeRunResponse(full, tests))
+}
+
 func (h *Handler) GetSubmission(c *fiber.Ctx) error {
 	userID, err := userIDFromCtx(c)
 	if err != nil {
@@ -101,6 +132,20 @@ func (h *Handler) GetSubmission(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(ToSubmissionResponse(sub, tests))
+}
+
+func (h *Handler) GetCodeRun(c *fiber.Ctx) error {
+	userID, err := userIDFromCtx(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
+	}
+
+	run, tests, err := h.service.GetCodeRunByIDForUser(c.Context(), c.Params("codeRunId"), userID)
+	if err != nil {
+		return mapServiceError(err)
+	}
+
+	return c.JSON(ToCodeRunResponse(run, tests))
 }
 
 func (h *Handler) JudgeCallback(c *fiber.Ctx) error {
