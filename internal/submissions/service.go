@@ -503,13 +503,10 @@ func (s *Service) validateJudgeCallback(ctx context.Context, sub *Submission, pa
 	}
 
 	for _, test := range payload.Tests {
-		if !isAllowedTestStatus(test.Status) {
+		if _, ok := allowed[test.TestCaseID]; !ok {
 			return ErrJudgeCallbackUnauthorized
 		}
-		if isCustomCodeRunTestID(test.TestCaseID) {
-			continue
-		}
-		if _, ok := allowed[test.TestCaseID]; !ok {
+		if !isAllowedTestStatus(test.Status) {
 			return ErrJudgeCallbackUnauthorized
 		}
 	}
@@ -556,10 +553,13 @@ func (s *Service) validateCodeRunJudgeCallback(ctx context.Context, run *CodeRun
 	}
 
 	for _, test := range payload.Tests {
-		if _, ok := allowed[test.TestCaseID]; !ok {
+		if !isAllowedTestStatus(test.Status) {
 			return ErrJudgeCallbackUnauthorized
 		}
-		if !isAllowedTestStatus(test.Status) {
+		if isCustomCodeRunTestID(test.TestCaseID) {
+			continue
+		}
+		if _, ok := allowed[test.TestCaseID]; !ok {
 			return ErrJudgeCallbackUnauthorized
 		}
 	}
