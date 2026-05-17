@@ -1,7 +1,9 @@
 package http
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/config"
@@ -16,6 +18,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func New(
@@ -27,6 +30,7 @@ func New(
 	matchesHandler *matches.Handler,
 	realtimeHandler *realtime.Handler,
 	submissionsHandler *submissions.Handler,
+	db *pgxpool.Pool,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: jsonErrorHandler,
@@ -45,6 +49,28 @@ func New(
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"ok":      true,
+			"service": "backend",
+		})
+	})
+	app.Get("/health/live", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"status":  "ok",
+			"service": "backend",
+		})
+	})
+	app.Get("/health/ready", func(c *fiber.Ctx) error {
+		ctx, cancel := context.WithTimeout(c.UserContext(), 3*time.Second)
+		defer cancel()
+
+		if err := db.Ping(ctx); err != nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status":  "error",
+				"service": "backend",
+			})
+		}
+
+		return c.JSON(fiber.Map{
+			"status":  "ok",
 			"service": "backend",
 		})
 	})
