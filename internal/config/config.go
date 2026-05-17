@@ -27,6 +27,7 @@ const (
 	defaultSubmissionRateWindow = "1m"
 	defaultMatchDuration        = "20m"
 	defaultMatchCleanupInterval = "30s"
+	defaultMatchPendingTimeout  = "30s"
 )
 
 type Config struct {
@@ -58,6 +59,7 @@ type Config struct {
 	SubmissionRateWindow time.Duration
 	MatchDuration        time.Duration
 	MatchCleanupInterval time.Duration
+	MatchPendingTimeout  time.Duration
 }
 
 func Load() (Config, error) {
@@ -142,6 +144,14 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("MATCH_CLEANUP_INTERVAL must be > 0")
 	}
 
+	matchPendingTimeout, err := time.ParseDuration(valueOrDefault("MATCH_PENDING_TIMEOUT", defaultMatchPendingTimeout))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse MATCH_PENDING_TIMEOUT: %w", err)
+	}
+	if matchPendingTimeout <= 0 {
+		return Config{}, fmt.Errorf("MATCH_PENDING_TIMEOUT must be > 0")
+	}
+
 	backendBaseURL := normalizeBaseURL(valueOrDefault("BACKEND_PUBLIC_URL", defaultBackendBaseURL))
 	judgeCallbackURL := normalizeBaseURL(valueOrDefault("JUDGE_CALLBACK_URL", backendBaseURL+"/internal/judge/callback"))
 	judgeCallbackToken := strings.TrimSpace(os.Getenv("JUDGE_CALLBACK_TOKEN"))
@@ -193,6 +203,7 @@ func Load() (Config, error) {
 		SubmissionRateWindow: submissionRateWindow,
 		MatchDuration:        matchDuration,
 		MatchCleanupInterval: matchCleanupInterval,
+		MatchPendingTimeout:  matchPendingTimeout,
 	}, nil
 }
 

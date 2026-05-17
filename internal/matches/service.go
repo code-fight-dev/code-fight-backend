@@ -19,6 +19,7 @@ type RepositoryInterface interface {
 	GetCurrentMatch(ctx context.Context, userID uuid.UUID) (Match, error)
 	ListMatchSubmissions(ctx context.Context, matchID uuid.UUID) ([]MatchSubmission, error)
 	FinishExpiredMatches(ctx context.Context, now time.Time, limit int) (int, error)
+	CancelExpiredPendingMatches(ctx context.Context, now time.Time, pendingTimeout time.Duration, limit int) (int, error)
 	FindQueuedOpponent(ctx context.Context, input JoinQueueInput) (*uuid.UUID, error)
 	EnqueuePlayer(ctx context.Context, input JoinQueueInput) error
 	RemoveQueuedPlayers(ctx context.Context, userIDs ...uuid.UUID) error
@@ -168,6 +169,26 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 	}
 
 	return QueueResult{Status: "matched", Match: &match}, nil
+}
+
+func (s *Service) LeaveQueue(ctx context.Context, userID uuid.UUID) error {
+	if userID == uuid.Nil {
+		return fmt.Errorf("leave queue: empty user id")
+	}
+
+	if err := s.repo.RemoveQueuedPlayers(ctx, userID); err != nil {
+		return err
+	}
+
+	current, err := s.repo.GetCurrentMatch(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if current.ID == uuid.Nil || current.Status != MatchStatusPending {
+		return nil
+	}
+
+	return s.repo.CancelMatch(ctx, current.ID)
 }
 
 func (s *Service) FinishMatch(ctx context.Context, input FinishMatchInput) error {
@@ -435,4 +456,15 @@ func (s *Service) FinishExpiredMatches(ctx context.Context, now time.Time, limit
 	}
 
 	return s.repo.FinishExpiredMatches(ctx, now, limit)
+}
+
+func (s *Service) CancelExpiredPendingMatches(ctx context.Context, now time.Time, pendingTimeout time.Duration, limit int) (int, error) {
+	if pendingTimeout <= 0 {
+		pendingTimeout = 30 * time.Second
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	return s.repo.CancelExpiredPendingMatches(ctx, now, pendingTimeout, limit)
 }
