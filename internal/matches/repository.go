@@ -361,13 +361,32 @@ func (r *Repository) FindQueuedOpponent(ctx context.Context, input JoinQueueInpu
 	}
 
 	const query = `
-		select user_id
-		from matchmaking_queue
-		where user_id <> $1
-		  and rating_mode = $2
-		  and task_mode = $3
-		  and is_rated = $4
-		order by created_at asc
+		with requester as (
+			select coalesce((
+				select rating
+				from user_ratings
+				where user_id = $1
+				  and mode = $2
+			), 1000) as rating
+		)
+		select q.user_id
+		from matchmaking_queue q
+		cross join requester
+		left join user_ratings opponent_rating
+		  on opponent_rating.user_id = q.user_id
+		 and opponent_rating.mode = q.rating_mode
+		where q.user_id <> $1
+		  and q.rating_mode = $2
+		  and q.task_mode = $3
+		  and q.is_rated = $4
+		  and abs(coalesce(opponent_rating.rating, 1000) - requester.rating) <= case
+			when now() - q.created_at < interval '1 minute' then 60
+			when now() - q.created_at < interval '3 minutes' then 120
+			when now() - q.created_at < interval '5 minutes' then 160
+			else 250
+		  end
+		order by abs(coalesce(opponent_rating.rating, 1000) - requester.rating) asc,
+		         q.created_at asc
 		limit 1
 	`
 
