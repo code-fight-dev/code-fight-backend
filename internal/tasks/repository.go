@@ -372,48 +372,7 @@ group by t.id
 		return nil, err
 	}
 
-	payload := decodePayload(challengeRowValue.PayloadRaw)
-	languages, versions, err := r.listLanguageVersions(ctx, challengeRowValue.TaskID)
-	if err != nil {
-		return nil, err
-	}
-
-	tests, err := r.listSampleTests(ctx, challengeRowValue.TaskID)
-	if err != nil {
-		return nil, err
-	}
-
-	out := &Challenge{
-		ID:                     payloadID(payload, challengeRowValue.Slug),
-		TaskID:                 challengeRowValue.TaskID,
-		Slug:                   challengeRowValue.Slug,
-		Title:                  fallbackString(payload.Title, challengeRowValue.Title),
-		Difficulty:             toFrontendDifficulty(challengeRowValue.Difficulty),
-		Summary:                payload.Summary,
-		Description:            payload.Description,
-		Examples:               payload.Examples,
-		Constraints:            payload.Constraints,
-		Notes:                  payload.Notes,
-		Tags:                   payload.Tags,
-		Category:               payload.Category,
-		Kind:                   payloadKind(payload),
-		SupportedLanguages:     normalizeLanguages(payloadLanguagesAllowedByTask(payload, languages)),
-		LanguageVersions:       versions,
-		StarterCodeByLanguage:  payload.StarterCodeByLanguage,
-		AcceptanceRate:         acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
-		EstimatedMinutes:       payload.EstimatedMinutes,
-		Attempts:               challengeRowValue.TotalSubmissions,
-		Popularity:             payload.Popularity,
-		AcceptedSubmissions:    challengeRowValue.AcceptedSubmissions,
-		AcceptedSubmissionRate: acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
-		TotalSubmissions:       challengeRowValue.TotalSubmissions,
-		CreatedAt:              payloadCreatedAt(payload, challengeRowValue.CreatedAt),
-		Progress:               payloadProgress(payload),
-		TestCases:              tests,
-		FrontendPayload:        normalizedPayloadRaw(challengeRowValue.PayloadRaw),
-	}
-
-	return out, nil
+	return r.buildChallengeDetail(ctx, challengeRowValue)
 }
 
 func (r *Repository) GetChallengeByID(ctx context.Context, taskID string) (*Challenge, error) {
@@ -461,7 +420,48 @@ group by t.id
 }
 
 func (r *Repository) buildChallengeDetail(ctx context.Context, challengeRowValue challengeRow) (*Challenge, error) {
-	return r.buildChallengeDetail(ctx, challengeRowValue)
+	payload := decodePayload(challengeRowValue.PayloadRaw)
+	languages, versions, err := r.listLanguageVersions(ctx, challengeRowValue.TaskID)
+	if err != nil {
+		return nil, err
+	}
+
+	tests, err := r.listSampleTests(ctx, challengeRowValue.TaskID)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &Challenge{
+		ID:                     payloadID(payload, challengeRowValue.Slug),
+		TaskID:                 challengeRowValue.TaskID,
+		Slug:                   challengeRowValue.Slug,
+		Title:                  fallbackString(payload.Title, challengeRowValue.Title),
+		Difficulty:             toFrontendDifficulty(challengeRowValue.Difficulty),
+		Summary:                payload.Summary,
+		Description:            payload.Description,
+		Examples:               payload.Examples,
+		Constraints:            payload.Constraints,
+		Notes:                  payload.Notes,
+		Tags:                   payload.Tags,
+		Category:               payload.Category,
+		Kind:                   payloadKind(payload),
+		SupportedLanguages:     normalizeLanguages(payloadLanguagesAllowedByTask(payload, languages)),
+		LanguageVersions:       versions,
+		StarterCodeByLanguage:  payload.StarterCodeByLanguage,
+		AcceptanceRate:         acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
+		EstimatedMinutes:       payload.EstimatedMinutes,
+		Attempts:               challengeRowValue.TotalSubmissions,
+		Popularity:             payload.Popularity,
+		AcceptedSubmissions:    challengeRowValue.AcceptedSubmissions,
+		AcceptedSubmissionRate: acceptanceRate(challengeRowValue.AcceptedSubmissions, challengeRowValue.TotalSubmissions),
+		TotalSubmissions:       challengeRowValue.TotalSubmissions,
+		CreatedAt:              payloadCreatedAt(payload, challengeRowValue.CreatedAt),
+		Progress:               payloadProgress(payload),
+		TestCases:              tests,
+		FrontendPayload:        normalizedPayloadRaw(challengeRowValue.PayloadRaw),
+	}
+
+	return out, nil
 }
 
 func (r *Repository) listLanguageVersions(
