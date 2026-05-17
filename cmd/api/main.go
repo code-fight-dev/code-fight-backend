@@ -127,6 +127,7 @@ func main() {
 		matchesHandler,
 		realtimeHandler,
 		submissionsHandler,
+		db,
 	)
 
 	logger.Info("starting api", "addr", cfg.ListenAddr(), "app_env", cfg.AppEnv)
