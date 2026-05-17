@@ -542,21 +542,21 @@ func (r *Repository) CancelExpiredPendingMatches(ctx context.Context, now time.T
 			select id
 			from matches
 			where status = 'pending'
-			  and created_at <= $1 - ($2::text)::interval
+			  and created_at <= now() - ($1::text)::interval
 			order by created_at asc
-			limit $3
+			limit $2
 			for update skip locked
 		)
 		update matches m
-		set status = $4,
-			result_type = $5,
-			winning_reason = $6,
-			judge_status = $7,
-			finished_at = coalesce(m.finished_at, $1),
+		set status = $3,
+			result_type = $4,
+			winning_reason = $5,
+			judge_status = $6,
+			finished_at = coalesce(m.finished_at, now()),
 			updated_at = now()
 		from expired
 		where m.id = expired.id
-	`, now, pendingTimeout.String(), limit, MatchStatusCancelled, MatchResultTypeCancelled, WinningReasonCancelled, JudgeStatusFailed)
+	`, pendingTimeout.String(), limit, MatchStatusCancelled, MatchResultTypeCancelled, WinningReasonCancelled, JudgeStatusFailed)
 	if err != nil {
 		return 0, fmt.Errorf("cancel expired pending matches: %w", err)
 	}
