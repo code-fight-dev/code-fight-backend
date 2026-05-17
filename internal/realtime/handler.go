@@ -50,11 +50,8 @@ func (h *Handler) Stream(c *fiber.Ctx) error {
 		heartbeat := time.NewTicker(20 * time.Second)
 		defer heartbeat.Stop()
 
-		ctx := c.UserContext()
 		for {
 			select {
-			case <-ctx.Done():
-				return
 			case event, ok := <-events:
 				if !ok {
 					return
