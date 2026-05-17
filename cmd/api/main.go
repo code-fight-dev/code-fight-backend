@@ -13,6 +13,7 @@ import (
 	"code-fight-backend/internal/judge"
 	"code-fight-backend/internal/leaderboard"
 	"code-fight-backend/internal/matches"
+	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
 	"code-fight-backend/internal/users"
@@ -68,6 +69,8 @@ func main() {
 
 	matchesRepo := matches.NewRepository(db)
 	taskSelector := matches.NewDBTaskSelector(db)
+	realtimeBroker := realtime.NewBroker()
+	realtimeHandler := realtime.NewHandler(realtimeBroker)
 
 	submissionsRepo := submissions.NewPGRepository(db)
 	submissionsTaskRepo := submissions.NewPGTaskRepository(db)
@@ -78,6 +81,7 @@ func main() {
 		taskSelector,
 		submissionsMatchReader,
 	)
+	matchesService.SetNotifier(realtimeBroker)
 	matchesHandler := matches.NewHandler(matchesService, cfg.MatchDuration)
 
 	tasksRepo := tasks.NewRepository(db)
@@ -98,6 +102,7 @@ func main() {
 		cfg.JudgeCallbackToken,
 		cfg.MaxSourceCodeBytes,
 	)
+	submissionsService.SetNotifier(realtimeBroker)
 	submissionsHandler := submissions.NewHandler(
 		submissionsService,
 		cfg.JudgeCallbackToken,
@@ -120,6 +125,7 @@ func main() {
 		tasksHandler,
 		leaderboardHandler,
 		matchesHandler,
+		realtimeHandler,
 		submissionsHandler,
 	)
 

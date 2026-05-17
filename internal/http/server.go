@@ -7,6 +7,7 @@ import (
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/leaderboard"
 	"code-fight-backend/internal/matches"
+	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
 	"code-fight-backend/internal/users"
@@ -24,6 +25,7 @@ func New(
 	tasksHandler *tasks.Handler,
 	leaderboardHandler *leaderboard.Handler,
 	matchesHandler *matches.Handler,
+	realtimeHandler *realtime.Handler,
 	submissionsHandler *submissions.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
@@ -36,7 +38,7 @@ func New(
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     strings.Join(cfg.AllowedOrigins, ","),
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Judge-Token",
-		AllowMethods:     "GET,POST,PATCH,HEAD,OPTIONS",
+		AllowMethods:     "GET,POST,DELETE,PATCH,HEAD,OPTIONS",
 		AllowCredentials: true,
 	}))
 
@@ -76,6 +78,9 @@ func New(
 
 	matchesGroup := protectedGroup("/api/matches", authHandler.RequireAuth)
 	matchesHandler.RegisterRoutes(matchesGroup)
+
+	eventsGroup := protectedGroup("/api/events", authHandler.RequireAuth)
+	realtimeHandler.RegisterRoutes(eventsGroup)
 
 	submissionsAPIGroup := protectedGroup(
 		"/api",
