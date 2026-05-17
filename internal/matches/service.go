@@ -4,12 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-const defaultPendingMatchTimeout = 30 * time.Second
+const (
+	defaultPendingMatchTimeout = 30 * time.Second
+	matchmakingCheckSlack      = time.Second
+)
+
+var matchmakingExpansionDelays = []time.Duration{
+	time.Minute,
+	3 * time.Minute,
+	5 * time.Minute,
+}
 
 type RepositoryInterface interface {
 	CreateMatch(ctx context.Context, match Match) (Match, error)
@@ -24,6 +34,7 @@ type RepositoryInterface interface {
 	CancelExpiredPendingMatches(ctx context.Context, now time.Time, pendingTimeout time.Duration, limit int) (int, error)
 	FindQueuedOpponent(ctx context.Context, input JoinQueueInput) (*uuid.UUID, error)
 	EnqueuePlayer(ctx context.Context, input JoinQueueInput) error
+	GetQueuedPlayer(ctx context.Context, userID uuid.UUID) (*QueuedPlayer, error)
 	RemoveQueuedPlayers(ctx context.Context, userIDs ...uuid.UUID) error
 
 	ApplySubmissionProgress(ctx context.Context, input ApplySubmissionProgressInput) error
@@ -40,6 +51,8 @@ type Service struct {
 	submissionReader SubmissionReader
 	pendingTimeout   time.Duration
 	notifier         Notifier
+	queueTimersMu    sync.Mutex
+	queueTimers      map[uuid.UUID]*time.Timer
 }
 
 func NewService(
@@ -52,6 +65,7 @@ func NewService(
 		taskSelector:     taskSelector,
 		submissionReader: submissionReader,
 		pendingTimeout:   defaultPendingMatchTimeout,
+		queueTimers:      make(map[uuid.UUID]*time.Timer),
 	}
 }
 
@@ -110,6 +124,8 @@ func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Matc
 	if err := s.repo.RemoveQueuedPlayers(ctx, input.Player1ID, input.Player2ID); err != nil {
 		return Match{}, err
 	}
+	s.cancelQueuedMatchCheck(input.Player1ID)
+	s.cancelQueuedMatchCheck(input.Player2ID)
 
 	s.schedulePendingMatchCancel(created.ID)
 	s.publishMatch("match.found", created)
@@ -206,6 +222,9 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 		if err := s.repo.EnqueuePlayer(ctx, input); err != nil {
 			return QueueResult{}, err
 		}
+		if queued, err := s.repo.GetQueuedPlayer(ctx, input.UserID); err == nil && queued != nil {
+			s.scheduleQueuedMatchCheck(*queued)
+		}
 		if s.notifier != nil {
 			s.notifier.Publish(input.UserID, "matchmaking.queued", QueueResult{Status: "queued"})
 		}
@@ -236,6 +255,7 @@ func (s *Service) LeaveQueue(ctx context.Context, userID uuid.UUID) error {
 	if err := s.repo.RemoveQueuedPlayers(ctx, userID); err != nil {
 		return err
 	}
+	s.cancelQueuedMatchCheck(userID)
 
 	current, err := s.repo.GetCurrentMatch(ctx, userID)
 	if err != nil {
@@ -254,6 +274,99 @@ func (s *Service) LeaveQueue(ctx context.Context, userID uuid.UUID) error {
 	}
 	s.publishMatch("match.cancelled", cancelled)
 	return nil
+}
+
+func (s *Service) scheduleQueuedMatchCheck(player QueuedPlayer) {
+	if player.UserID == uuid.Nil {
+		return
+	}
+
+	delay, ok := nextMatchmakingExpansionDelay(time.Since(player.CreatedAt))
+	if !ok {
+		return
+	}
+
+	s.queueTimersMu.Lock()
+	if existing := s.queueTimers[player.UserID]; existing != nil {
+		existing.Stop()
+	}
+	s.queueTimers[player.UserID] = time.AfterFunc(delay, func() {
+		s.runQueuedMatchCheck(player.UserID)
+	})
+	s.queueTimersMu.Unlock()
+}
+
+func (s *Service) cancelQueuedMatchCheck(userID uuid.UUID) {
+	if userID == uuid.Nil {
+		return
+	}
+
+	s.queueTimersMu.Lock()
+	if existing := s.queueTimers[userID]; existing != nil {
+		existing.Stop()
+		delete(s.queueTimers, userID)
+	}
+	s.queueTimersMu.Unlock()
+}
+
+func (s *Service) runQueuedMatchCheck(userID uuid.UUID) {
+	s.queueTimersMu.Lock()
+	delete(s.queueTimers, userID)
+	s.queueTimersMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	queued, err := s.repo.GetQueuedPlayer(ctx, userID)
+	if err != nil || queued == nil {
+		return
+	}
+
+	current, err := s.repo.GetCurrentMatch(ctx, userID)
+	if err != nil || current.ID != uuid.Nil {
+		return
+	}
+
+	input := JoinQueueInput{
+		UserID:     queued.UserID,
+		RatingMode: queued.RatingMode,
+		TaskMode:   queued.TaskMode,
+		IsRated:    queued.IsRated,
+	}
+
+	opponentID, err := s.repo.FindQueuedOpponent(ctx, input)
+	if err != nil {
+		s.scheduleQueuedMatchCheck(*queued)
+		return
+	}
+	if opponentID == nil {
+		s.scheduleQueuedMatchCheck(*queued)
+		return
+	}
+
+	match, err := s.CreateMatch(ctx, CreateMatchInput{
+		Player1ID:  *opponentID,
+		Player2ID:  queued.UserID,
+		RatingMode: queued.RatingMode,
+		TaskMode:   queued.TaskMode,
+		IsRated:    queued.IsRated,
+	})
+	if err != nil {
+		s.scheduleQueuedMatchCheck(*queued)
+		return
+	}
+
+	s.publishMatch("matchmaking.matched", match)
+}
+
+func nextMatchmakingExpansionDelay(elapsed time.Duration) (time.Duration, bool) {
+	for _, threshold := range matchmakingExpansionDelays {
+		if elapsed < threshold {
+			return threshold - elapsed + matchmakingCheckSlack, true
+		}
+	}
+
+	return 0, false
 }
 
 func (s *Service) FinishMatch(ctx context.Context, input FinishMatchInput) error {

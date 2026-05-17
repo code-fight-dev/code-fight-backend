@@ -110,6 +110,14 @@ type JoinQueueInput struct {
 	IsRated    bool      `json:"is_rated"`
 }
 
+type QueuedPlayer struct {
+	UserID     uuid.UUID `json:"user_id"`
+	RatingMode string    `json:"rating_mode"`
+	TaskMode   TaskMode  `json:"task_mode"`
+	IsRated    bool      `json:"is_rated"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type QueueResult struct {
 	Status string `json:"status"`
 	Match  *Match `json:"match,omitempty"`

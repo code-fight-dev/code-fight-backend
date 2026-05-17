@@ -21,38 +21,6 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-const matchSelectColumns = `
-	id,
-	rating_mode,
-	task_mode,
-	task_id,
-	task_difficulty_snapshot,
-	player1_id,
-	player2_id,
-	player1_ready,
-	player2_ready,
-	winner_id,
-	status,
-	judge_status,
-	result_type,
-	winning_reason,
-	is_rated,
-	rating_applied,
-	player1_score,
-	player2_score,
-	player1_attempts,
-	player2_attempts,
-	player1_solved,
-	player2_solved,
-	player1_solved_at,
-	player2_solved_at,
-	started_at,
-	finished_at,
-	expires_at,
-	created_at,
-	updated_at
-`
-
 func (r *Repository) CreateMatch(ctx context.Context, match Match) (Match, error) {
 	query := `
 		insert into matches (
@@ -360,38 +328,8 @@ func (r *Repository) FindQueuedOpponent(ctx context.Context, input JoinQueueInpu
 		input.TaskMode = TaskModeNormal
 	}
 
-	const query = `
-		with requester as (
-			select coalesce((
-				select rating
-				from user_ratings
-				where user_id = $1
-				  and mode = $2
-			), 1000) as rating
-		)
-		select q.user_id
-		from matchmaking_queue q
-		cross join requester
-		left join user_ratings opponent_rating
-		  on opponent_rating.user_id = q.user_id
-		 and opponent_rating.mode = q.rating_mode
-		where q.user_id <> $1
-		  and q.rating_mode = $2
-		  and q.task_mode = $3
-		  and q.is_rated = $4
-		  and abs(coalesce(opponent_rating.rating, 1000) - requester.rating) <= case
-			when now() - q.created_at < interval '1 minute' then 60
-			when now() - q.created_at < interval '3 minutes' then 120
-			when now() - q.created_at < interval '5 minutes' then 160
-			else 250
-		  end
-		order by abs(coalesce(opponent_rating.rating, 1000) - requester.rating) asc,
-		         q.created_at asc
-		limit 1
-	`
-
 	var opponentID uuid.UUID
-	if err := r.db.QueryRow(ctx, query, input.UserID, input.RatingMode, input.TaskMode, input.IsRated).Scan(&opponentID); err != nil {
+	if err := r.db.QueryRow(ctx, findQueuedOpponentQuery, input.UserID, input.RatingMode, input.TaskMode, input.IsRated).Scan(&opponentID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -409,15 +347,7 @@ func (r *Repository) EnqueuePlayer(ctx context.Context, input JoinQueueInput) er
 		input.TaskMode = TaskModeNormal
 	}
 
-	_, err := r.db.Exec(ctx, `
-		insert into matchmaking_queue (user_id, rating_mode, task_mode, is_rated, created_at)
-		values ($1, $2, $3, $4, now())
-		on conflict (user_id) do update set
-			rating_mode = excluded.rating_mode,
-			task_mode = excluded.task_mode,
-			is_rated = excluded.is_rated,
-			created_at = now()
-	`, input.UserID, input.RatingMode, input.TaskMode, input.IsRated)
+	_, err := r.db.Exec(ctx, enqueuePlayerQuery, input.UserID, input.RatingMode, input.TaskMode, input.IsRated)
 	if err != nil {
 		return fmt.Errorf("enqueue player: %w", err)
 	}
@@ -425,15 +355,31 @@ func (r *Repository) EnqueuePlayer(ctx context.Context, input JoinQueueInput) er
 	return nil
 }
 
+func (r *Repository) GetQueuedPlayer(ctx context.Context, userID uuid.UUID) (*QueuedPlayer, error) {
+	var player QueuedPlayer
+	err := r.db.QueryRow(ctx, getQueuedPlayerQuery, userID).Scan(
+		&player.UserID,
+		&player.RatingMode,
+		&player.TaskMode,
+		&player.IsRated,
+		&player.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get queued player: %w", err)
+	}
+
+	return &player, nil
+}
+
 func (r *Repository) RemoveQueuedPlayers(ctx context.Context, userIDs ...uuid.UUID) error {
 	if len(userIDs) == 0 {
 		return nil
 	}
 
-	_, err := r.db.Exec(ctx, `
-		delete from matchmaking_queue
-		where user_id = any($1)
-	`, userIDs)
+	_, err := r.db.Exec(ctx, removeQueuedPlayersQuery, userIDs)
 	if err != nil {
 		return fmt.Errorf("remove queued players: %w", err)
 	}
