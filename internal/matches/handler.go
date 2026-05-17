@@ -24,6 +24,7 @@ func NewHandler(service *Service, matchDuration time.Duration) *Handler {
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/", h.CreateMatch)
 	router.Post("/queue", h.JoinQueue)
+	router.Delete("/queue", h.LeaveQueue)
 	router.Post("/:id/start", h.StartMatch)
 	router.Post("/:id/cancel", h.CancelMatch)
 	router.Post("/:id/surrender", h.SurrenderMatch)
@@ -77,6 +78,19 @@ func (h *Handler) JoinQueue(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(result)
+}
+
+func (h *Handler) LeaveQueue(c *fiber.Ctx) error {
+	userID, err := userIDFromCtx(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
+	}
+
+	if err := h.service.LeaveQueue(c.UserContext(), userID); err != nil {
+		return writeMatchError(c, err)
+	}
+
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func (h *Handler) RegisterInternalRoutes(router fiber.Router) {

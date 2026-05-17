@@ -529,6 +529,41 @@ func (r *Repository) FinishExpiredMatches(ctx context.Context, now time.Time, li
 	return finished, nil
 }
 
+func (r *Repository) CancelExpiredPendingMatches(ctx context.Context, now time.Time, pendingTimeout time.Duration, limit int) (int, error) {
+	if pendingTimeout <= 0 {
+		pendingTimeout = 30 * time.Second
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	ct, err := r.db.Exec(ctx, `
+		with expired as (
+			select id
+			from matches
+			where status = 'pending'
+			  and created_at <= now() - ($1::text)::interval
+			order by created_at asc
+			limit $2
+			for update skip locked
+		)
+		update matches m
+		set status = $3,
+			result_type = $4,
+			winning_reason = $5,
+			judge_status = $6,
+			finished_at = coalesce(m.finished_at, now()),
+			updated_at = now()
+		from expired
+		where m.id = expired.id
+	`, pendingTimeout.String(), limit, MatchStatusCancelled, MatchResultTypeCancelled, WinningReasonCancelled, JudgeStatusFailed)
+	if err != nil {
+		return 0, fmt.Errorf("cancel expired pending matches: %w", err)
+	}
+
+	return int(ct.RowsAffected()), nil
+}
+
 func (r *Repository) finishExpiredMatch(ctx context.Context, matchID uuid.UUID, now time.Time) (bool, error) {
 	match, err := r.GetMatch(ctx, matchID)
 	if err != nil {

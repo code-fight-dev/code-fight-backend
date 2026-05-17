@@ -110,7 +110,7 @@ func main() {
 		go startSessionCleanupLoop(cleanupCtx, logger, authService, cfg.SessionCleanupInterval)
 	}
 	if cfg.MatchCleanupInterval > 0 {
-		go startMatchCleanupLoop(cleanupCtx, logger, matchesService, cfg.MatchCleanupInterval)
+		go startMatchCleanupLoop(cleanupCtx, logger, matchesService, cfg.MatchCleanupInterval, cfg.MatchPendingTimeout)
 	}
 
 	app := httpserver.New(
@@ -151,11 +151,22 @@ func startSessionCleanupLoop(ctx context.Context, logger *slog.Logger, authServi
 	}
 }
 
-func startMatchCleanupLoop(ctx context.Context, logger *slog.Logger, matchesService *matches.Service, interval time.Duration) {
+func startMatchCleanupLoop(
+	ctx context.Context,
+	logger *slog.Logger,
+	matchesService *matches.Service,
+	interval time.Duration,
+	pendingTimeout time.Duration,
+) {
 	if count, err := matchesService.FinishExpiredMatches(ctx, time.Now().UTC(), 50); err != nil {
 		logger.Error("finish expired matches", "error", err)
 	} else if count > 0 {
 		logger.Info("finished expired matches", "count", count)
+	}
+	if count, err := matchesService.CancelExpiredPendingMatches(ctx, time.Now().UTC(), pendingTimeout, 50); err != nil {
+		logger.Error("cancel expired pending matches", "error", err)
+	} else if count > 0 {
+		logger.Info("cancelled expired pending matches", "count", count)
 	}
 
 	ticker := time.NewTicker(interval)
@@ -166,13 +177,20 @@ func startMatchCleanupLoop(ctx context.Context, logger *slog.Logger, matchesServ
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			count, err := matchesService.FinishExpiredMatches(ctx, time.Now().UTC(), 50)
+			now := time.Now().UTC()
+
+			count, err := matchesService.FinishExpiredMatches(ctx, now, 50)
 			if err != nil {
 				logger.Error("finish expired matches", "error", err)
-				continue
-			}
-			if count > 0 {
+			} else if count > 0 {
 				logger.Info("finished expired matches", "count", count)
+			}
+
+			count, err = matchesService.CancelExpiredPendingMatches(ctx, now, pendingTimeout, 50)
+			if err != nil {
+				logger.Error("cancel expired pending matches", "error", err)
+			} else if count > 0 {
+				logger.Info("cancelled expired pending matches", "count", count)
 			}
 		}
 	}

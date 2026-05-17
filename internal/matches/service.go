@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const defaultPendingMatchTimeout = 30 * time.Second
+
 type RepositoryInterface interface {
 	CreateMatch(ctx context.Context, match Match) (Match, error)
 	GetMatch(ctx context.Context, matchID uuid.UUID) (Match, error)
@@ -19,6 +21,7 @@ type RepositoryInterface interface {
 	GetCurrentMatch(ctx context.Context, userID uuid.UUID) (Match, error)
 	ListMatchSubmissions(ctx context.Context, matchID uuid.UUID) ([]MatchSubmission, error)
 	FinishExpiredMatches(ctx context.Context, now time.Time, limit int) (int, error)
+	CancelExpiredPendingMatches(ctx context.Context, now time.Time, pendingTimeout time.Duration, limit int) (int, error)
 	FindQueuedOpponent(ctx context.Context, input JoinQueueInput) (*uuid.UUID, error)
 	EnqueuePlayer(ctx context.Context, input JoinQueueInput) error
 	RemoveQueuedPlayers(ctx context.Context, userIDs ...uuid.UUID) error
@@ -30,6 +33,7 @@ type Service struct {
 	repo             RepositoryInterface
 	taskSelector     TaskSelector
 	submissionReader SubmissionReader
+	pendingTimeout   time.Duration
 }
 
 func NewService(
@@ -41,6 +45,7 @@ func NewService(
 		repo:             repo,
 		taskSelector:     taskSelector,
 		submissionReader: submissionReader,
+		pendingTimeout:   defaultPendingMatchTimeout,
 	}
 }
 
@@ -96,7 +101,27 @@ func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Matc
 		return Match{}, err
 	}
 
+	s.schedulePendingMatchCancel(created.ID)
+
 	return created, nil
+}
+
+func (s *Service) schedulePendingMatchCancel(matchID uuid.UUID) {
+	if matchID == uuid.Nil {
+		return
+	}
+
+	time.AfterFunc(s.pendingTimeout, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		match, err := s.repo.GetMatch(ctx, matchID)
+		if err != nil || match.Status != MatchStatusPending {
+			return
+		}
+
+		_ = s.repo.CancelMatch(ctx, matchID)
+	})
 }
 
 func (s *Service) StartMatch(ctx context.Context, input StartMatchInput) (Match, error) {
@@ -168,6 +193,26 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 	}
 
 	return QueueResult{Status: "matched", Match: &match}, nil
+}
+
+func (s *Service) LeaveQueue(ctx context.Context, userID uuid.UUID) error {
+	if userID == uuid.Nil {
+		return fmt.Errorf("leave queue: empty user id")
+	}
+
+	if err := s.repo.RemoveQueuedPlayers(ctx, userID); err != nil {
+		return err
+	}
+
+	current, err := s.repo.GetCurrentMatch(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if current.ID == uuid.Nil || current.Status != MatchStatusPending {
+		return nil
+	}
+
+	return s.repo.CancelMatch(ctx, current.ID)
 }
 
 func (s *Service) FinishMatch(ctx context.Context, input FinishMatchInput) error {
@@ -279,7 +324,12 @@ func (s *Service) GetMatch(ctx context.Context, matchID uuid.UUID) (Match, error
 		return Match{}, fmt.Errorf("get match: empty match id")
 	}
 
-	return s.repo.GetMatch(ctx, matchID)
+	match, err := s.repo.GetMatch(ctx, matchID)
+	if err != nil {
+		return Match{}, err
+	}
+
+	return s.cancelExpiredPendingMatchOnRead(ctx, match)
 }
 
 func (s *Service) ListUserMatches(ctx context.Context, input ListUserMatchesInput) ([]Match, error) {
@@ -407,7 +457,24 @@ func (s *Service) GetCurrentMatch(ctx context.Context, userID uuid.UUID) (Match,
 		return Match{}, fmt.Errorf("get current match: empty user id")
 	}
 
-	return s.repo.GetCurrentMatch(ctx, userID)
+	match, err := s.repo.GetCurrentMatch(ctx, userID)
+	if err != nil {
+		return Match{}, err
+	}
+
+	return s.cancelExpiredPendingMatchOnRead(ctx, match)
+}
+
+func (s *Service) cancelExpiredPendingMatchOnRead(ctx context.Context, match Match) (Match, error) {
+	if match.ID == uuid.Nil || match.Status != MatchStatusPending {
+		return match, nil
+	}
+
+	if _, err := s.repo.CancelExpiredPendingMatches(ctx, time.Now().UTC(), s.pendingTimeout, 100); err != nil {
+		return Match{}, err
+	}
+
+	return s.repo.GetMatch(ctx, match.ID)
 }
 
 func (s *Service) ListMatchSubmissions(ctx context.Context, matchID uuid.UUID, viewerID uuid.UUID) ([]MatchSubmission, error) {
@@ -435,4 +502,15 @@ func (s *Service) FinishExpiredMatches(ctx context.Context, now time.Time, limit
 	}
 
 	return s.repo.FinishExpiredMatches(ctx, now, limit)
+}
+
+func (s *Service) CancelExpiredPendingMatches(ctx context.Context, now time.Time, pendingTimeout time.Duration, limit int) (int, error) {
+	if pendingTimeout <= 0 {
+		pendingTimeout = defaultPendingMatchTimeout
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	return s.repo.CancelExpiredPendingMatches(ctx, now, pendingTimeout, limit)
 }
