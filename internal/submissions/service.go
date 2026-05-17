@@ -33,12 +33,18 @@ type MatchResultApplier interface {
 	ApplySubmissionResult(ctx context.Context, submissionID uuid.UUID) error
 }
 
+type Notifier interface {
+	Publish(userID uuid.UUID, eventType string, payload any)
+	PublishMany(userIDs []uuid.UUID, eventType string, payload any)
+}
+
 type Service struct {
 	repo           Repository
 	taskRepo       TaskRepository
 	matchRepo      MatchRepository
 	judgeClient    judge.Client
 	matchApplier   MatchResultApplier
+	notifier       Notifier
 	callbackURL    string
 	callbackToken  string
 	maxSourceBytes int
@@ -64,6 +70,10 @@ func NewService(
 		callbackToken:  callbackToken,
 		maxSourceBytes: maxSourceBytes,
 	}
+}
+
+func (s *Service) SetNotifier(notifier Notifier) {
+	s.notifier = notifier
 }
 
 func (s *Service) CreateTaskSubmission(
@@ -128,7 +138,10 @@ func (s *Service) CreateTaskSubmission(
 		return nil, err
 	}
 
-	full, _, err := s.repo.GetByID(ctx, sub.ID)
+	full, tests, err := s.repo.GetByID(ctx, sub.ID)
+	if err == nil {
+		s.publishSubmission(ctx, "submission.created", full, tests)
+	}
 	return full, err
 }
 
@@ -193,7 +206,10 @@ func (s *Service) CreateTaskCodeRun(
 		return nil, err
 	}
 
-	full, _, err := s.repo.GetCodeRunByID(ctx, run.ID)
+	full, tests, err := s.repo.GetCodeRunByID(ctx, run.ID)
+	if err == nil {
+		s.publishCodeRun("code_run.created", full, tests)
+	}
 	return full, err
 }
 
@@ -270,7 +286,10 @@ func (s *Service) CreateMatchSubmission(
 		return nil, err
 	}
 
-	full, _, err := s.repo.GetByID(ctx, sub.ID)
+	full, tests, err := s.repo.GetByID(ctx, sub.ID)
+	if err == nil {
+		s.publishSubmission(ctx, "submission.created", full, tests)
+	}
 	return full, err
 }
 
@@ -340,7 +359,14 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 	}
 
 	if payload.JudgeStatus == JudgeStatusRunning {
-		return s.repo.MarkRunning(ctx, sub.ID, payload.JudgeStatus, payload.StartedAt)
+		if err := s.repo.MarkRunning(ctx, sub.ID, payload.JudgeStatus, payload.StartedAt); err != nil {
+			return err
+		}
+		full, tests, err := s.repo.GetByID(ctx, sub.ID)
+		if err == nil {
+			s.publishSubmission(ctx, "submission.running", full, tests)
+		}
+		return nil
 	}
 
 	finalStatus := StatusFinished
@@ -386,6 +412,14 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 	if err != nil {
 		return err
 	}
+	full, fullTests, err := s.repo.GetByID(ctx, sub.ID)
+	if err == nil {
+		eventType := "submission.finished"
+		if finalStatus == StatusFailed {
+			eventType = "submission.failed"
+		}
+		s.publishSubmission(ctx, eventType, full, fullTests)
+	}
 
 	if sub.MatchID != nil && s.matchApplier != nil {
 		submissionID, err := uuid.Parse(sub.ID)
@@ -416,7 +450,14 @@ func (s *Service) HandleCodeRunJudgeCallback(ctx context.Context, payload judge.
 	}
 
 	if payload.JudgeStatus == JudgeStatusRunning {
-		return s.repo.MarkCodeRunRunning(ctx, run.ID, payload.JudgeStatus, payload.StartedAt)
+		if err := s.repo.MarkCodeRunRunning(ctx, run.ID, payload.JudgeStatus, payload.StartedAt); err != nil {
+			return err
+		}
+		full, tests, err := s.repo.GetCodeRunByID(ctx, run.ID)
+		if err == nil {
+			s.publishCodeRun("code_run.running", full, tests)
+		}
+		return nil
 	}
 
 	finalStatus := StatusFinished
@@ -444,7 +485,7 @@ func (s *Service) HandleCodeRunJudgeCallback(ctx context.Context, payload judge.
 		})
 	}
 
-	return s.repo.CompleteCodeRun(ctx, run.ID, CompleteInput{
+	if err := s.repo.CompleteCodeRun(ctx, run.ID, CompleteInput{
 		Status:          finalStatus,
 		JudgeStatus:     payload.JudgeStatus,
 		Verdict:         payload.Verdict,
@@ -461,7 +502,18 @@ func (s *Service) HandleCodeRunJudgeCallback(ctx context.Context, payload judge.
 		StderrTruncated: payload.StderrTruncated,
 		StartedAt:       payload.StartedAt,
 		FinishedAt:      payload.FinishedAt,
-	}, tests)
+	}, tests); err != nil {
+		return err
+	}
+	full, fullTests, err := s.repo.GetCodeRunByID(ctx, run.ID)
+	if err == nil {
+		eventType := "code_run.finished"
+		if finalStatus == StatusFailed {
+			eventType = "code_run.failed"
+		}
+		s.publishCodeRun(eventType, full, fullTests)
+	}
+	return nil
 }
 
 func (s *Service) validateJudgeCallback(ctx context.Context, sub *Submission, payload judge.CallbackPayload) error {
@@ -833,4 +885,48 @@ func (s *Service) isJudgeLanguageSupported(ctx context.Context, language, versio
 	}
 
 	return false, nil
+}
+
+func (s *Service) publishSubmission(ctx context.Context, eventType string, sub *Submission, tests []SubmissionTestResult) {
+	if s.notifier == nil || sub == nil {
+		return
+	}
+
+	payload := ToSubmissionResponse(sub, tests)
+	userID, err := uuid.Parse(sub.UserID)
+	if err != nil {
+		return
+	}
+
+	if sub.MatchID == nil {
+		s.notifier.Publish(userID, eventType, payload)
+		return
+	}
+
+	matchID, err := uuid.Parse(*sub.MatchID)
+	if err != nil {
+		s.notifier.Publish(userID, eventType, payload)
+		return
+	}
+
+	match, err := s.matchRepo.GetMatch(ctx, matchID)
+	if err != nil {
+		s.notifier.Publish(userID, eventType, payload)
+		return
+	}
+
+	s.notifier.PublishMany([]uuid.UUID{match.Player1ID, match.Player2ID}, eventType, payload)
+}
+
+func (s *Service) publishCodeRun(eventType string, run *CodeRun, tests []CodeRunTestResult) {
+	if s.notifier == nil || run == nil {
+		return
+	}
+
+	userID, err := uuid.Parse(run.UserID)
+	if err != nil {
+		return
+	}
+
+	s.notifier.Publish(userID, eventType, ToCodeRunResponse(run, tests))
 }

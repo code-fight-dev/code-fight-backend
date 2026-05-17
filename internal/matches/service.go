@@ -29,11 +29,17 @@ type RepositoryInterface interface {
 	ApplySubmissionProgress(ctx context.Context, input ApplySubmissionProgressInput) error
 }
 
+type Notifier interface {
+	Publish(userID uuid.UUID, eventType string, payload any)
+	PublishMany(userIDs []uuid.UUID, eventType string, payload any)
+}
+
 type Service struct {
 	repo             RepositoryInterface
 	taskSelector     TaskSelector
 	submissionReader SubmissionReader
 	pendingTimeout   time.Duration
+	notifier         Notifier
 }
 
 func NewService(
@@ -47,6 +53,10 @@ func NewService(
 		submissionReader: submissionReader,
 		pendingTimeout:   defaultPendingMatchTimeout,
 	}
+}
+
+func (s *Service) SetNotifier(notifier Notifier) {
+	s.notifier = notifier
 }
 
 func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Match, error) {
@@ -102,6 +112,7 @@ func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Matc
 	}
 
 	s.schedulePendingMatchCancel(created.ID)
+	s.publishMatch("match.found", created)
 
 	return created, nil
 }
@@ -120,7 +131,14 @@ func (s *Service) schedulePendingMatchCancel(matchID uuid.UUID) {
 			return
 		}
 
-		_ = s.repo.CancelMatch(ctx, matchID)
+		if err := s.repo.CancelMatch(ctx, matchID); err != nil {
+			return
+		}
+		cancelled, err := s.repo.GetMatch(ctx, matchID)
+		if err != nil {
+			return
+		}
+		s.publishMatch("match.cancelled", cancelled)
 	})
 }
 
@@ -144,7 +162,17 @@ func (s *Service) StartMatch(ctx context.Context, input StartMatchInput) (Match,
 		return Match{}, ErrTaskNotAssigned
 	}
 
-	return s.repo.StartMatch(ctx, input.MatchID, input.ActorID, input.Duration)
+	updated, err := s.repo.StartMatch(ctx, input.MatchID, input.ActorID, input.Duration)
+	if err != nil {
+		return Match{}, err
+	}
+	if updated.Status == MatchStatusRunning {
+		s.publishMatch("match.started", updated)
+	} else {
+		s.publishMatch("match.accepted", updated)
+	}
+
+	return updated, nil
 }
 
 func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueResult, error) {
@@ -178,6 +206,9 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 		if err := s.repo.EnqueuePlayer(ctx, input); err != nil {
 			return QueueResult{}, err
 		}
+		if s.notifier != nil {
+			s.notifier.Publish(input.UserID, "matchmaking.queued", QueueResult{Status: "queued"})
+		}
 		return QueueResult{Status: "queued"}, nil
 	}
 
@@ -192,7 +223,9 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 		return QueueResult{}, err
 	}
 
-	return QueueResult{Status: "matched", Match: &match}, nil
+	result := QueueResult{Status: "matched", Match: &match}
+	s.publishMatch("matchmaking.matched", match)
+	return result, nil
 }
 
 func (s *Service) LeaveQueue(ctx context.Context, userID uuid.UUID) error {
@@ -212,7 +245,15 @@ func (s *Service) LeaveQueue(ctx context.Context, userID uuid.UUID) error {
 		return nil
 	}
 
-	return s.repo.CancelMatch(ctx, current.ID)
+	if err := s.repo.CancelMatch(ctx, current.ID); err != nil {
+		return err
+	}
+	cancelled, err := s.repo.GetMatch(ctx, current.ID)
+	if err != nil {
+		return err
+	}
+	s.publishMatch("match.cancelled", cancelled)
+	return nil
 }
 
 func (s *Service) FinishMatch(ctx context.Context, input FinishMatchInput) error {
@@ -259,7 +300,14 @@ func (s *Service) FinishMatch(ctx context.Context, input FinishMatchInput) error
 		}
 	}
 
-	return s.repo.FinishMatch(ctx, input)
+	if err := s.repo.FinishMatch(ctx, input); err != nil {
+		return err
+	}
+	match, err := s.repo.GetMatch(ctx, input.MatchID)
+	if err == nil {
+		s.publishMatch("match.finished", match)
+	}
+	return nil
 }
 
 func (s *Service) CancelMatch(ctx context.Context, input CancelMatchInput) error {
@@ -280,7 +328,14 @@ func (s *Service) CancelMatch(ctx context.Context, input CancelMatchInput) error
 		return ErrMatchAlreadyStarted
 	}
 
-	return s.repo.CancelMatch(ctx, input.MatchID)
+	if err := s.repo.CancelMatch(ctx, input.MatchID); err != nil {
+		return err
+	}
+	cancelled, err := s.repo.GetMatch(ctx, input.MatchID)
+	if err == nil {
+		s.publishMatch("match.cancelled", cancelled)
+	}
+	return nil
 }
 
 func (s *Service) SurrenderMatch(ctx context.Context, input SurrenderMatchInput) error {
@@ -310,13 +365,20 @@ func (s *Service) SurrenderMatch(ctx context.Context, input SurrenderMatchInput)
 	}
 
 	judgeStatus := JudgeStatusFinished
-	return s.repo.FinishMatch(ctx, FinishMatchInput{
+	if err := s.repo.FinishMatch(ctx, FinishMatchInput{
 		MatchID:       match.ID,
 		WinnerID:      &winnerID,
 		ResultType:    resultType,
 		WinningReason: WinningReasonSurrender,
 		JudgeStatus:   &judgeStatus,
-	})
+	}); err != nil {
+		return err
+	}
+	finished, err := s.repo.GetMatch(ctx, match.ID)
+	if err == nil {
+		s.publishMatch("match.finished", finished)
+	}
+	return nil
 }
 
 func (s *Service) GetMatch(ctx context.Context, matchID uuid.UUID) (Match, error) {
@@ -404,6 +466,9 @@ func (s *Service) ApplySubmissionResult(ctx context.Context, submissionID uuid.U
 	if err != nil {
 		return err
 	}
+	if updated, err := s.repo.GetMatch(ctx, match.ID); err == nil {
+		s.publishMatch("match.progress", updated)
+	}
 
 	if !isAccepted {
 		return nil
@@ -448,6 +513,9 @@ func (s *Service) ApplySubmissionResult(ctx context.Context, submissionID uuid.U
 		}
 		return err
 	}
+	if finished, err := s.repo.GetMatch(ctx, updatedMatch.ID); err == nil {
+		s.publishMatch("match.finished", finished)
+	}
 
 	return nil
 }
@@ -474,7 +542,11 @@ func (s *Service) cancelExpiredPendingMatchOnRead(ctx context.Context, match Mat
 		return Match{}, err
 	}
 
-	return s.repo.GetMatch(ctx, match.ID)
+	updated, err := s.repo.GetMatch(ctx, match.ID)
+	if err == nil && updated.Status == MatchStatusCancelled {
+		s.publishMatch("match.cancelled", updated)
+	}
+	return updated, err
 }
 
 func (s *Service) ListMatchSubmissions(ctx context.Context, matchID uuid.UUID, viewerID uuid.UUID) ([]MatchSubmission, error) {
@@ -513,4 +585,11 @@ func (s *Service) CancelExpiredPendingMatches(ctx context.Context, now time.Time
 	}
 
 	return s.repo.CancelExpiredPendingMatches(ctx, now, pendingTimeout, limit)
+}
+
+func (s *Service) publishMatch(eventType string, match Match) {
+	if s.notifier == nil || match.ID == uuid.Nil {
+		return
+	}
+	s.notifier.PublishMany([]uuid.UUID{match.Player1ID, match.Player2ID}, eventType, match)
 }
