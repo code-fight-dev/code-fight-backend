@@ -34,6 +34,10 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Get("/user/:id", h.ListUserMatches)
 }
 
+func (h *Handler) RegisterPublicRoutes(router fiber.Router) {
+	router.Get("/matches/stats", h.GetPublicStats)
+}
+
 type joinQueueRequest struct {
 	RatingMode string `json:"rating_mode"`
 	TaskMode   string `json:"task_mode"`
@@ -91,6 +95,15 @@ func (h *Handler) LeaveQueue(c *fiber.Ctx) error {
 	}
 
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *Handler) GetPublicStats(c *fiber.Ctx) error {
+	stats, err := h.service.GetPublicStats(c.UserContext())
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(stats)
 }
 
 func (h *Handler) RegisterInternalRoutes(router fiber.Router) {

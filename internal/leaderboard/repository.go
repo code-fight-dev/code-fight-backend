@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -78,6 +79,65 @@ func (r *Repository) GetViewerRank(ctx context.Context, mode string, userID uuid
 
 	return &entry, nil
 }
+
+func (r *Repository) GetStats(ctx context.Context, mode string) (Stats, error) {
+	var stats Stats
+	if err := r.db.QueryRow(ctx, leaderboardStatsQuery, mode).Scan(
+		&stats.QueuedPlayers,
+		&stats.ActiveMatchPlayers,
+		&stats.RankedPlayers,
+		&stats.MatchesToday,
+		&stats.AverageDailyMatches,
+	); err != nil {
+		return Stats{}, fmt.Errorf("get leaderboard stats: %w", err)
+	}
+	if stats.AverageDailyMatches > 0 {
+		stats.MatchesTodayGrowthPercent = ((float64(stats.MatchesToday) - stats.AverageDailyMatches) / stats.AverageDailyMatches) * 100
+	}
+	stats.CachedAt = time.Now().UTC()
+
+	return stats, nil
+}
+
+const leaderboardStatsQuery = `
+	with active_players as (
+		select player1_id as user_id
+		from matches
+		where status in ('pending', 'running')
+		union
+		select player2_id as user_id
+		from matches
+		where status in ('pending', 'running')
+	),
+	days as (
+		select generate_series(
+			date_trunc('day', now()) - interval '30 days',
+			date_trunc('day', now()) - interval '1 day',
+			interval '1 day'
+		) as day
+	),
+	daily_matches as (
+		select date_trunc('day', created_at) as day, count(*)::float8 as count
+		from matches
+		where rating_mode = $1
+		  and created_at >= date_trunc('day', now()) - interval '30 days'
+		  and created_at < date_trunc('day', now())
+		group by 1
+	)
+	select
+		(select count(*)::int from matchmaking_queue) as queued_players,
+		(select count(*)::int from active_players) as active_match_players,
+		(select count(*)::int from user_ratings where mode = $1 and rated_games > 0) as ranked_players,
+		(
+			select count(*)::int
+			from matches
+			where rating_mode = $1
+			  and created_at >= date_trunc('day', now())
+		) as matches_today,
+		coalesce(avg(coalesce(daily_matches.count, 0)), 0)::float8 as average_daily_matches
+	from days
+	left join daily_matches on daily_matches.day = days.day
+`
 
 func leaderboardQuery(selectClause string) string {
 	return `

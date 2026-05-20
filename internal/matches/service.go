@@ -13,6 +13,7 @@ import (
 const (
 	defaultPendingMatchTimeout = 30 * time.Second
 	matchmakingCheckSlack      = time.Second
+	publicStatsCacheTTL        = 30 * time.Minute
 )
 
 var matchmakingExpansionDelays = []time.Duration{
@@ -36,6 +37,7 @@ type RepositoryInterface interface {
 	EnqueuePlayer(ctx context.Context, input JoinQueueInput) error
 	GetQueuedPlayer(ctx context.Context, userID uuid.UUID) (*QueuedPlayer, error)
 	RemoveQueuedPlayers(ctx context.Context, userIDs ...uuid.UUID) error
+	GetPublicStats(ctx context.Context) (PublicStats, error)
 
 	ApplySubmissionProgress(ctx context.Context, input ApplySubmissionProgressInput) error
 }
@@ -53,6 +55,9 @@ type Service struct {
 	notifier         Notifier
 	queueTimersMu    sync.Mutex
 	queueTimers      map[uuid.UUID]*time.Timer
+	publicStatsMu    sync.RWMutex
+	publicStats      PublicStats
+	publicStatsUntil time.Time
 }
 
 func NewService(
@@ -274,6 +279,34 @@ func (s *Service) LeaveQueue(ctx context.Context, userID uuid.UUID) error {
 	}
 	s.publishMatch("match.cancelled", cancelled)
 	return nil
+}
+
+func (s *Service) GetPublicStats(ctx context.Context) (PublicStats, error) {
+	now := time.Now().UTC()
+
+	s.publicStatsMu.RLock()
+	if now.Before(s.publicStatsUntil) {
+		stats := s.publicStats
+		s.publicStatsMu.RUnlock()
+		return stats, nil
+	}
+	s.publicStatsMu.RUnlock()
+
+	s.publicStatsMu.Lock()
+	defer s.publicStatsMu.Unlock()
+
+	if now.Before(s.publicStatsUntil) {
+		return s.publicStats, nil
+	}
+
+	stats, err := s.repo.GetPublicStats(ctx)
+	if err != nil {
+		return PublicStats{}, err
+	}
+	s.publicStats = stats
+	s.publicStatsUntil = now.Add(publicStatsCacheTTL)
+
+	return stats, nil
 }
 
 func (s *Service) scheduleQueuedMatchCheck(player QueuedPlayer) {

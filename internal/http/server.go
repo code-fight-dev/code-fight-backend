@@ -101,6 +101,7 @@ func New(
 	tasksGroup := protectedGroup("/api")
 	tasksHandler.RegisterRoutes(tasksGroup)
 	leaderboardHandler.RegisterRoutes(tasksGroup)
+	matchesHandler.RegisterPublicRoutes(tasksGroup)
 
 	matchesGroup := protectedGroup("/api/matches", authHandler.RequireAuth)
 	matchesHandler.RegisterRoutes(matchesGroup)

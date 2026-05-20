@@ -1,6 +1,10 @@
 package leaderboard
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 const (
 	DefaultMode   = "global"
@@ -32,4 +36,15 @@ type Page struct {
 	Total      int     `json:"total"`
 	Items      []Entry `json:"items"`
 	ViewerRank *Entry  `json:"viewerRank,omitempty"`
+	Stats      Stats   `json:"stats"`
+}
+
+type Stats struct {
+	QueuedPlayers             int       `json:"queuedPlayers"`
+	ActiveMatchPlayers        int       `json:"activeMatchPlayers"`
+	RankedPlayers             int       `json:"rankedPlayers"`
+	MatchesToday              int       `json:"matchesToday"`
+	AverageDailyMatches       float64   `json:"averageDailyMatches"`
+	MatchesTodayGrowthPercent float64   `json:"matchesTodayGrowthPercent"`
+	CachedAt                  time.Time `json:"cachedAt"`
 }
