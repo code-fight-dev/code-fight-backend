@@ -123,6 +123,12 @@ type QueueResult struct {
 	Match  *Match `json:"match,omitempty"`
 }
 
+type PublicStats struct {
+	QueuedPlayers      int       `json:"queuedPlayers"`
+	ActiveMatchPlayers int       `json:"activeMatchPlayers"`
+	CachedAt           time.Time `json:"cachedAt"`
+}
+
 type StartMatchInput struct {
 	MatchID  uuid.UUID     `json:"match_id"`
 	ActorID  uuid.UUID     `json:"actor_id"`

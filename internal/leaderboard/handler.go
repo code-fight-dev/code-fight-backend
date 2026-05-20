@@ -30,14 +30,33 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 }
 
 func (h *Handler) GetLeaderboard(c *fiber.Ctx) error {
-	limit, err := parseIntQuery(c, "limit", DefaultLimit)
+	limitFallback := DefaultLimit
+	if strings.TrimSpace(c.Query("pageSize")) != "" {
+		limitFallback = 0
+	}
+
+	limit, err := parseIntQuery(c, "limit", limitFallback)
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid limit")
+	}
+	if limit == 0 {
+		limit, err = parseIntQuery(c, "pageSize", DefaultLimit)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid pageSize")
+		}
 	}
 
 	offset, err := parseIntQuery(c, "offset", DefaultOffset)
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid offset")
+	}
+
+	if strings.TrimSpace(c.Query("page")) != "" {
+		page, err := parseIntQuery(c, "page", 1)
+		if err != nil || page <= 0 {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid page")
+		}
+		offset = (page - 1) * limit
 	}
 
 	viewerID, err := h.viewerID(c)
