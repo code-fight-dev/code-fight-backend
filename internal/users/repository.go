@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -135,6 +136,16 @@ func (r *Repository) buildProfile(ctx context.Context, record profileRecord) (Pr
 		return Profile{}, err
 	}
 
+	topLanguages, err := r.getTopLanguages(ctx, record.ID)
+	if err != nil {
+		return Profile{}, err
+	}
+
+	recentMatches, err := r.getRecentMatches(ctx, record.ID)
+	if err != nil {
+		return Profile{}, err
+	}
+
 	return Profile{
 		ID:                record.ID,
 		Username:          record.Username,
@@ -151,8 +162,8 @@ func (r *Repository) buildProfile(ctx context.Context, record profileRecord) (Pr
 		CreatedAt:         record.CreatedAt,
 		Stats:             stats,
 		EloHistory:        eloHistory,
-		TopLanguages:      []TopLanguage{},
-		RecentMatches:     []RecentMatch{},
+		TopLanguages:      topLanguages,
+		RecentMatches:     recentMatches,
 		Achievements:      []Achievement{},
 	}, nil
 }
@@ -437,6 +448,139 @@ func (r *Repository) getEloHistory(ctx context.Context, userID uuid.UUID) ([]Elo
 	return points, nil
 }
 
+func (r *Repository) getTopLanguages(ctx context.Context, userID uuid.UUID) ([]TopLanguage, error) {
+	const query = `
+		with language_counts as (
+			select
+				lower(trim(language)) as language,
+				count(*)::float8 as submissions_count
+			from submissions
+			where user_id = $1
+				and trim(language) <> ''
+			group by lower(trim(language))
+		),
+		total as (
+			select sum(submissions_count) as submissions_count
+			from language_counts
+		)
+		select
+			language_counts.language,
+			language_counts.submissions_count / total.submissions_count as usage_share
+		from language_counts
+		cross join total
+		order by language_counts.submissions_count desc, language_counts.language asc
+		limit 5
+	`
+
+	rows, err := r.db.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get top languages: %w", err)
+	}
+	defer rows.Close()
+
+	languages := make([]TopLanguage, 0, 5)
+	for rows.Next() {
+		var language TopLanguage
+		if err := rows.Scan(&language.Name, &language.UsageShare); err != nil {
+			return nil, fmt.Errorf("scan top language: %w", err)
+		}
+
+		language.Name = displayLanguageName(language.Name)
+		languages = append(languages, language)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate top languages: %w", err)
+	}
+
+	return languages, nil
+}
+
+func (r *Repository) getRecentMatches(ctx context.Context, userID uuid.UUID) ([]RecentMatch, error) {
+	const query = `
+		select
+			m.id,
+			case
+				when m.status = 'cancelled' then 'cancelled'
+				when m.winner_id is null then 'draw'
+				when m.winner_id = $1 then 'win'
+				else 'loss'
+			end as result,
+			opponent.id,
+			opponent.username,
+			opponent.display_name,
+			case
+				when opponent.avatar_source = 'custom' and opponent.avatar_url <> '' then opponent.avatar_url
+				when opponent.avatar_source = 'provider' and opponent.provider_avatar_url <> '' then opponent.provider_avatar_url
+				when opponent.avatar_url <> '' then opponent.avatar_url
+				else opponent.provider_avatar_url
+			end as opponent_avatar_url,
+			m.task_difficulty_snapshot,
+			case
+				when m.is_rated and m.rating_applied then rh.delta
+				else null
+			end as elo_delta,
+			m.is_rated,
+			coalesce(m.finished_at, m.updated_at, m.created_at) as finished_at
+		from matches m
+		join users opponent
+			on opponent.id = case
+				when m.player1_id = $1 then m.player2_id
+				else m.player1_id
+			end
+		left join lateral (
+			select delta
+			from rating_history
+			where match_id = m.id
+				and user_id = $1
+				and mode = m.rating_mode
+			order by created_at desc, id desc
+			limit 1
+		) rh on true
+		where (m.player1_id = $1 or m.player2_id = $1)
+			and m.status in ('finished', 'cancelled')
+		order by coalesce(m.finished_at, m.updated_at, m.created_at) desc, m.id desc
+		limit 10
+	`
+
+	rows, err := r.db.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get recent matches: %w", err)
+	}
+	defer rows.Close()
+
+	matches := make([]RecentMatch, 0, 10)
+	for rows.Next() {
+		var match RecentMatch
+		if err := rows.Scan(
+			&match.ID,
+			&match.Result,
+			&match.Opponent.ID,
+			&match.Opponent.Username,
+			&match.Opponent.DisplayName,
+			&match.Opponent.AvatarURL,
+			&match.Difficulty,
+			&match.EloDelta,
+			&match.IsRated,
+			&match.FinishedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan recent match: %w", err)
+		}
+
+		if match.Opponent.DisplayName == "" {
+			match.Opponent.DisplayName = match.Opponent.Username
+		}
+
+		matches = append(matches, match)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent matches: %w", err)
+	}
+
+	return matches, nil
+}
+
 func scanProfileRecord(row pgx.Row) (profileRecord, error) {
 	var record profileRecord
 	if err := row.Scan(
@@ -481,4 +625,37 @@ func resolveAvatarURL(source AvatarSource, avatarURL string, providerAvatarURL s
 	}
 
 	return providerAvatarURL
+}
+
+func displayLanguageName(language string) string {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "typescript":
+		return "TypeScript"
+	case "javascript":
+		return "JavaScript"
+	case "python":
+		return "Python"
+	case "java":
+		return "Java"
+	case "cpp":
+		return "C++"
+	case "go":
+		return "Go"
+	case "rust":
+		return "Rust"
+	case "zig":
+		return "Zig"
+	case "csharp":
+		return "C#"
+	case "c":
+		return "C"
+	case "ruby":
+		return "Ruby"
+	case "php":
+		return "PHP"
+	case "sql":
+		return "SQL"
+	default:
+		return language
+	}
 }
