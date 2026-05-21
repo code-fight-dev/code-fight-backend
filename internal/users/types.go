@@ -63,7 +63,20 @@ type TopLanguage struct {
 }
 
 type RecentMatch struct {
-	ID string `json:"id"`
+	ID         uuid.UUID           `json:"id"`
+	Result     string              `json:"result"`
+	Opponent   RecentMatchOpponent `json:"opponent"`
+	Difficulty *string             `json:"difficulty"`
+	EloDelta   *int                `json:"eloDelta"`
+	IsRated    bool                `json:"isRated"`
+	FinishedAt time.Time           `json:"finishedAt"`
+}
+
+type RecentMatchOpponent struct {
+	ID          uuid.UUID `json:"id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"displayName"`
+	AvatarURL   string    `json:"avatarUrl"`
 }
 
 type Achievement struct {
