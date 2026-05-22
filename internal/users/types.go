@@ -32,7 +32,6 @@ type Profile struct {
 	EloHistory        []EloHistoryPoint `json:"eloHistory"`
 	TopLanguages      []TopLanguage     `json:"topLanguages"`
 	RecentMatches     []RecentMatch     `json:"recentMatches"`
-	Achievements      []Achievement     `json:"achievements"`
 }
 
 type ProfileStats struct {
@@ -77,10 +76,6 @@ type RecentMatchOpponent struct {
 	Username    string    `json:"username"`
 	DisplayName string    `json:"displayName"`
 	AvatarURL   string    `json:"avatarUrl"`
-}
-
-type Achievement struct {
-	ID string `json:"id"`
 }
 
 type UpdateProfileInput struct {

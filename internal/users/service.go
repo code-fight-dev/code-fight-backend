@@ -196,9 +196,6 @@ func applyProfileDefaults(profile Profile) Profile {
 	if profile.RecentMatches == nil {
 		profile.RecentMatches = []RecentMatch{}
 	}
-	if profile.Achievements == nil {
-		profile.Achievements = []Achievement{}
-	}
 
 	return profile
 }
