@@ -164,7 +164,6 @@ func (r *Repository) buildProfile(ctx context.Context, record profileRecord) (Pr
 		EloHistory:        eloHistory,
 		TopLanguages:      topLanguages,
 		RecentMatches:     recentMatches,
-		Achievements:      []Achievement{},
 	}, nil
 }
 
