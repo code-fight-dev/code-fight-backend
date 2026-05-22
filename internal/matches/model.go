@@ -79,6 +79,8 @@ type Match struct {
 	WinningReason          *WinningReason   `json:"winning_reason,omitempty"`
 	IsRated                bool             `json:"is_rated"`
 	RatingApplied          bool             `json:"rating_applied"`
+	Player1RatingDelta     *int             `json:"player1_rating_delta,omitempty"`
+	Player2RatingDelta     *int             `json:"player2_rating_delta,omitempty"`
 
 	Player1Score    int        `json:"player1_score"`
 	Player2Score    int        `json:"player2_score"`

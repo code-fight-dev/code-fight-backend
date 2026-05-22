@@ -169,6 +169,13 @@ const getMatchQuery = `
 	where id = $1
 `
 
+const getMatchRatingDeltasQuery = `
+	select user_id, delta
+	from rating_history
+	where match_id = $1
+	  and mode = $2
+`
+
 const acceptMatchQuery = `
 	update matches
 	set player1_ready = $2,
