@@ -242,6 +242,55 @@ const listMatchSubmissionsQuery = `
 	limit 100
 `
 
+const listMatchReplaySubmissionsQuery = `
+	select
+		id,
+		match_id,
+		task_id,
+		user_id,
+		language,
+		language_version,
+		source_code,
+		status,
+		verdict,
+		judge_submission_id,
+		judge_status,
+		error_message,
+		passed_tests,
+		total_tests,
+		compile_time_ms,
+		run_time_ms,
+		peak_memory_kb,
+		score,
+		exit_code,
+		compile_log,
+		stdout_truncated,
+		stderr_truncated,
+		created_at,
+		started_at,
+		finished_at,
+		updated_at
+	from submissions
+	where match_id = $1
+	order by created_at asc
+	limit 500
+`
+
+const listMatchReplayPlayersQuery = `
+	select
+		u.id,
+		u.username,
+		coalesce(nullif(u.display_name, ''), u.username) as display_name,
+		case
+			when u.avatar_source = 'custom' and u.avatar_url <> '' then u.avatar_url
+			when u.avatar_source = 'provider' and u.provider_avatar_url <> '' then u.provider_avatar_url
+			when u.avatar_url <> '' then u.avatar_url
+			else u.provider_avatar_url
+		end as avatar_url
+	from users u
+	where u.id = $1 or u.id = $2
+	order by case when u.id = $1 then 0 else 1 end
+`
 const listExpiredMatchesQuery = `
 	select id
 	from matches
