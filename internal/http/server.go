@@ -103,7 +103,11 @@ func New(
 	leaderboardHandler.RegisterRoutes(tasksGroup)
 	matchesHandler.RegisterPublicRoutes(tasksGroup)
 
-	matchesGroup := protectedGroup("/api/matches", authHandler.RequireAuth)
+	matchesGroup := protectedGroup(
+		"/api/matches",
+		authHandler.RequireAuth,
+		newReplayCaptureLimiter(120, time.Minute),
+	)
 	matchesHandler.RegisterRoutes(matchesGroup)
 
 	eventsGroup := protectedGroup("/api/events", authHandler.RequireAuth)
