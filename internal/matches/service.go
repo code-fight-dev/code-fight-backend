@@ -31,6 +31,8 @@ type RepositoryInterface interface {
 	ListUserMatches(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Match, error)
 	GetCurrentMatch(ctx context.Context, userID uuid.UUID) (Match, error)
 	ListMatchSubmissions(ctx context.Context, matchID uuid.UUID) ([]MatchSubmission, error)
+	ListMatchReplayPlayers(ctx context.Context, player1ID uuid.UUID, player2ID uuid.UUID) ([]MatchReplayPlayer, error)
+	ListMatchReplaySubmissions(ctx context.Context, matchID uuid.UUID) ([]MatchReplaySubmission, error)
 	FinishExpiredMatches(ctx context.Context, now time.Time, limit int) (int, error)
 	CancelExpiredPendingMatches(ctx context.Context, now time.Time, pendingTimeout time.Duration, limit int) (int, error)
 	FindQueuedOpponent(ctx context.Context, input JoinQueueInput) (*uuid.UUID, error)
@@ -714,6 +716,101 @@ func (s *Service) ListMatchSubmissions(ctx context.Context, matchID uuid.UUID, v
 	return s.repo.ListMatchSubmissions(ctx, matchID)
 }
 
+func (s *Service) GetMatchReplay(ctx context.Context, matchID uuid.UUID, viewerID uuid.UUID) (MatchReplay, error) {
+	if matchID == uuid.Nil {
+		return MatchReplay{}, fmt.Errorf("get match replay: empty match id")
+	}
+	if viewerID == uuid.Nil {
+		return MatchReplay{}, fmt.Errorf("get match replay: empty viewer id")
+	}
+
+	match, err := s.repo.GetMatch(ctx, matchID)
+	if err != nil {
+		return MatchReplay{}, err
+	}
+	if viewerID != match.Player1ID && viewerID != match.Player2ID {
+		return MatchReplay{}, ErrMatchReplayForbidden
+	}
+
+	switch match.Status {
+	case MatchStatusFinished, MatchStatusCancelled:
+	default:
+		return MatchReplay{}, ErrMatchReplayUnavailable
+	}
+
+	players, err := s.repo.ListMatchReplayPlayers(ctx, match.Player1ID, match.Player2ID)
+	if err != nil {
+		return MatchReplay{}, err
+	}
+
+	submissions, err := s.repo.ListMatchReplaySubmissions(ctx, matchID)
+	if err != nil {
+		return MatchReplay{}, err
+	}
+
+	events, snapshots, err := s.loadCapturedReplayTimeline(ctx, matchID)
+	if err != nil {
+		return MatchReplay{}, err
+	}
+
+	return MatchReplay{
+		Permissions: MatchReplayPermissions{
+			CanViewReplay:     true,
+			CanViewSourceCode: true,
+		},
+		Match:   match,
+		Players: players,
+		Timeline: MatchReplayTimeline{
+			Version:     replayCaptureTimelineVersion,
+			DurationMs:  calculateReplayDurationMs(match, submissions, events, snapshots),
+			Events:      events,
+			Snapshots:   snapshots,
+			Submissions: submissions,
+		},
+	}, nil
+}
+
+func calculateReplayDurationMs(
+	match Match,
+	submissions []MatchReplaySubmission,
+	events []MatchReplayEvent,
+	snapshots []MatchReplaySnapshot,
+) int64 {
+	start := match.CreatedAt
+	if match.StartedAt != nil && !match.StartedAt.IsZero() {
+		start = match.StartedAt.UTC()
+	}
+
+	end := match.UpdatedAt
+	if match.FinishedAt != nil && !match.FinishedAt.IsZero() {
+		end = match.FinishedAt.UTC()
+	}
+
+	for _, submission := range submissions {
+		if submission.UpdatedAt.After(end) {
+			end = submission.UpdatedAt
+		}
+	}
+
+	clockDurationMs := int64(0)
+	if !end.Before(start) {
+		clockDurationMs = end.Sub(start).Milliseconds()
+	}
+
+	maxTimelineMs := clockDurationMs
+	for _, event := range events {
+		if event.TMs > maxTimelineMs {
+			maxTimelineMs = event.TMs
+		}
+	}
+	for _, snapshot := range snapshots {
+		if snapshot.TMs > maxTimelineMs {
+			maxTimelineMs = snapshot.TMs
+		}
+	}
+
+	return maxTimelineMs
+}
 func (s *Service) FinishExpiredMatches(ctx context.Context, now time.Time, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 50

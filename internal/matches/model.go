@@ -2,6 +2,7 @@ package matches
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -217,4 +218,76 @@ type MatchSubmission struct {
 	StartedAt       *time.Time `json:"startedAt,omitempty"`
 	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
 	UpdatedAt       time.Time  `json:"updatedAt"`
+}
+
+type MatchReplayPermissions struct {
+	CanViewReplay     bool `json:"can_view_replay"`
+	CanViewSourceCode bool `json:"can_view_source_code"`
+}
+
+type MatchReplayPlayer struct {
+	ID          uuid.UUID `json:"id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"display_name"`
+	AvatarURL   string    `json:"avatar_url"`
+}
+
+type MatchReplayEvent struct {
+	UserID  uuid.UUID       `json:"user_id"`
+	Seq     int64           `json:"seq"`
+	TMs     int64           `json:"t_ms"`
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+type MatchReplaySnapshot struct {
+	UserID     uuid.UUID `json:"user_id"`
+	Seq        int64     `json:"seq"`
+	TMs        int64     `json:"t_ms"`
+	Language   string    `json:"language"`
+	SourceCode string    `json:"source_code"`
+}
+
+type MatchReplaySubmission struct {
+	ID                uuid.UUID  `json:"id"`
+	MatchID           uuid.UUID  `json:"match_id"`
+	TaskID            uuid.UUID  `json:"task_id"`
+	UserID            uuid.UUID  `json:"user_id"`
+	Language          string     `json:"language"`
+	LanguageVersion   string     `json:"language_version"`
+	SourceCode        string     `json:"source_code"`
+	Status            string     `json:"status"`
+	Verdict           *string    `json:"verdict,omitempty"`
+	JudgeSubmissionID *string    `json:"judge_submission_id,omitempty"`
+	JudgeStatus       *string    `json:"judge_status,omitempty"`
+	ErrorMessage      *string    `json:"error_message,omitempty"`
+	PassedTests       int        `json:"passed_tests"`
+	TotalTests        int        `json:"total_tests"`
+	CompileTimeMs     *int       `json:"compile_time_ms,omitempty"`
+	RunTimeMs         *int       `json:"run_time_ms,omitempty"`
+	PeakMemoryKb      *int       `json:"peak_memory_kb,omitempty"`
+	Score             int        `json:"score"`
+	ExitCode          *int       `json:"exit_code,omitempty"`
+	CompileLog        *string    `json:"compile_log,omitempty"`
+	StdoutTruncated   *string    `json:"stdout_truncated,omitempty"`
+	StderrTruncated   *string    `json:"stderr_truncated,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	FinishedAt        *time.Time `json:"finished_at,omitempty"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+type MatchReplayTimeline struct {
+	Version     int                     `json:"version"`
+	DurationMs  int64                   `json:"duration_ms"`
+	Events      []MatchReplayEvent      `json:"events"`
+	Snapshots   []MatchReplaySnapshot   `json:"snapshots"`
+	Submissions []MatchReplaySubmission `json:"submissions"`
+}
+
+type MatchReplay struct {
+	Permissions MatchReplayPermissions `json:"permissions"`
+	Match       Match                  `json:"match"`
+	Players     []MatchReplayPlayer    `json:"players"`
+	Timeline    MatchReplayTimeline    `json:"timeline"`
 }

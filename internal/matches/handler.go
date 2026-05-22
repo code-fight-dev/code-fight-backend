@@ -28,9 +28,12 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/:id/start", h.StartMatch)
 	router.Post("/:id/cancel", h.CancelMatch)
 	router.Post("/:id/surrender", h.SurrenderMatch)
+	router.Post("/:id/replay/events", h.IngestMatchReplayEvents)
+	router.Post("/:id/replay/snapshots", h.IngestMatchReplaySnapshot)
 	router.Get("/current", h.GetCurrentMatch)
 	router.Get("/:id", h.GetMatch)
 	router.Get("/:id/submissions", h.ListMatchSubmissions)
+	router.Get("/:id/replay", h.GetMatchReplay)
 	router.Get("/user/:id", h.ListUserMatches)
 }
 
@@ -356,6 +359,24 @@ func (h *Handler) ListMatchSubmissions(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"items": items})
 }
 
+func (h *Handler) GetMatchReplay(c *fiber.Ctx) error {
+	userID, err := userIDFromCtx(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
+	}
+
+	matchID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid match id"})
+	}
+
+	replay, err := h.service.GetMatchReplay(c.UserContext(), matchID, userID)
+	if err != nil {
+		return writeMatchError(c, err)
+	}
+
+	return c.JSON(replay)
+}
 func (h *Handler) ListUserMatches(c *fiber.Ctx) error {
 	userID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -415,7 +436,13 @@ func writeMatchError(c *fiber.Ctx, err error) error {
 		errors.Is(err, ErrInvalidTaskMode),
 		errors.Is(err, ErrInvalidResultType),
 		errors.Is(err, ErrInvalidWinningReason),
-		errors.Is(err, ErrInvalidJudgeStatus):
+		errors.Is(err, ErrInvalidJudgeStatus),
+		errors.Is(err, ErrReplayEventsEmpty),
+		errors.Is(err, ErrReplayEventsBatchTooLarge),
+		errors.Is(err, ErrReplayInvalidEvent),
+		errors.Is(err, ErrReplayEventPayloadTooLarge),
+		errors.Is(err, ErrReplayInvalidSnapshot),
+		errors.Is(err, ErrReplaySnapshotTooLarge):
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 
 	case errors.Is(err, ErrTaskNotAssigned),
@@ -423,14 +450,19 @@ func writeMatchError(c *fiber.Ctx, err error) error {
 		errors.Is(err, ErrMatchAlreadyFinished),
 		errors.Is(err, ErrMatchCancelled),
 		errors.Is(err, ErrRatingAlreadyApplied),
-		errors.Is(err, ErrInvalidMatchStatus):
+		errors.Is(err, ErrInvalidMatchStatus),
+		errors.Is(err, ErrMatchReplayUnavailable),
+		errors.Is(err, ErrMatchReplayCaptureUnavailable),
+		errors.Is(err, ErrReplaySeqConflict),
+		errors.Is(err, ErrReplaySnapshotAheadOfEvents):
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": err.Error()})
 
 	case errors.Is(err, ErrRatingNotFound),
 		errors.Is(err, ErrNoTasksAvailable):
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": err.Error()})
 
-	case errors.Is(err, ErrSubmissionUserNotInMatch):
+	case errors.Is(err, ErrSubmissionUserNotInMatch),
+		errors.Is(err, ErrMatchReplayForbidden):
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": err.Error()})
 
 	default:

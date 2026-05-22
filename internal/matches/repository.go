@@ -341,6 +341,83 @@ func (r *Repository) ListMatchSubmissions(ctx context.Context, matchID uuid.UUID
 	return items, nil
 }
 
+func (r *Repository) ListMatchReplayPlayers(ctx context.Context, player1ID uuid.UUID, player2ID uuid.UUID) ([]MatchReplayPlayer, error) {
+	rows, err := r.db.Query(ctx, listMatchReplayPlayersQuery, player1ID, player2ID)
+	if err != nil {
+		return nil, fmt.Errorf("list match replay players: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]MatchReplayPlayer, 0, 2)
+	for rows.Next() {
+		var item MatchReplayPlayer
+		if err := rows.Scan(
+			&item.ID,
+			&item.Username,
+			&item.DisplayName,
+			&item.AvatarURL,
+		); err != nil {
+			return nil, fmt.Errorf("scan match replay player: %w", err)
+		}
+		items = append(items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate match replay players: %w", err)
+	}
+
+	return items, nil
+}
+
+func (r *Repository) ListMatchReplaySubmissions(ctx context.Context, matchID uuid.UUID) ([]MatchReplaySubmission, error) {
+	rows, err := r.db.Query(ctx, listMatchReplaySubmissionsQuery, matchID)
+	if err != nil {
+		return nil, fmt.Errorf("list match replay submissions: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]MatchReplaySubmission, 0)
+	for rows.Next() {
+		var item MatchReplaySubmission
+		if err := rows.Scan(
+			&item.ID,
+			&item.MatchID,
+			&item.TaskID,
+			&item.UserID,
+			&item.Language,
+			&item.LanguageVersion,
+			&item.SourceCode,
+			&item.Status,
+			&item.Verdict,
+			&item.JudgeSubmissionID,
+			&item.JudgeStatus,
+			&item.ErrorMessage,
+			&item.PassedTests,
+			&item.TotalTests,
+			&item.CompileTimeMs,
+			&item.RunTimeMs,
+			&item.PeakMemoryKb,
+			&item.Score,
+			&item.ExitCode,
+			&item.CompileLog,
+			&item.StdoutTruncated,
+			&item.StderrTruncated,
+			&item.CreatedAt,
+			&item.StartedAt,
+			&item.FinishedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan match replay submission: %w", err)
+		}
+		items = append(items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate match replay submissions: %w", err)
+	}
+
+	return items, nil
+}
 func (r *Repository) FinishExpiredMatches(ctx context.Context, now time.Time, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 50
