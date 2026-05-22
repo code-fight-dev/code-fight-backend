@@ -71,6 +71,10 @@ func (r *Repository) GetMatch(ctx context.Context, matchID uuid.UUID) (Match, er
 		return Match{}, fmt.Errorf("get match: %w", err)
 	}
 
+	if err := r.hydrateMatchRatingDeltas(ctx, &match); err != nil {
+		return Match{}, err
+	}
+
 	return match, nil
 }
 
@@ -207,6 +211,12 @@ func (r *Repository) ListUserMatches(ctx context.Context, userID uuid.UUID, limi
 		return nil, fmt.Errorf("iterate user matches: %w", err)
 	}
 
+	for index := range matches {
+		if err := r.hydrateMatchRatingDeltas(ctx, &matches[index]); err != nil {
+			return nil, err
+		}
+	}
+
 	return matches, nil
 }
 
@@ -219,7 +229,48 @@ func (r *Repository) GetCurrentMatch(ctx context.Context, userID uuid.UUID) (Mat
 		return Match{}, fmt.Errorf("get current match: %w", err)
 	}
 
+	if err := r.hydrateMatchRatingDeltas(ctx, &match); err != nil {
+		return Match{}, err
+	}
+
 	return match, nil
+}
+
+func (r *Repository) hydrateMatchRatingDeltas(ctx context.Context, match *Match) error {
+	if match == nil ||
+		match.ID == uuid.Nil ||
+		!match.IsRated ||
+		!match.RatingApplied ||
+		match.Status != MatchStatusFinished {
+		return nil
+	}
+
+	rows, err := r.db.Query(ctx, getMatchRatingDeltasQuery, match.ID, match.RatingMode)
+	if err != nil {
+		return fmt.Errorf("get match rating deltas: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var userID uuid.UUID
+		var delta int
+		if err := rows.Scan(&userID, &delta); err != nil {
+			return fmt.Errorf("scan match rating delta: %w", err)
+		}
+
+		switch userID {
+		case match.Player1ID:
+			match.Player1RatingDelta = &delta
+		case match.Player2ID:
+			match.Player2RatingDelta = &delta
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate match rating deltas: %w", err)
+	}
+
+	return nil
 }
 
 func (r *Repository) FindQueuedOpponent(ctx context.Context, input JoinQueueInput) (*uuid.UUID, error) {
