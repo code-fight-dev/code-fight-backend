@@ -1,8 +1,10 @@
 package users
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"unicode/utf8"
 
@@ -17,7 +19,13 @@ const (
 	maxStateProvinceLength = 80
 	maxCityLength          = 80
 	maxAvatarDataURLLength = 3_000_000
+	maxAvatarFileSize      = 2_000_000
 )
+
+type AvatarStorage interface {
+	Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) (string, error)
+	Delete(ctx context.Context, key string) error
+}
 
 var allowedAvatarDataURLPrefixes = []string{
 	"data:image/jpeg;base64,",
@@ -26,12 +34,19 @@ var allowedAvatarDataURLPrefixes = []string{
 	"data:image/gif;base64,",
 }
 
-type Service struct {
-	repository *Repository
+var avatarFileExtensions = map[string]string{
+	"image/jpeg": "jpg",
+	"image/png":  "png",
+	"image/gif":  "gif",
 }
 
-func NewService(repository *Repository) *Service {
-	return &Service{repository: repository}
+type Service struct {
+	repository    *Repository
+	avatarStorage AvatarStorage
+}
+
+func NewService(repository *Repository, avatarStorage AvatarStorage) *Service {
+	return &Service{repository: repository, avatarStorage: avatarStorage}
 }
 
 func (s *Service) GetProfileByUsername(ctx context.Context, username string) (Profile, error) {
@@ -63,12 +78,88 @@ func (s *Service) UpdateProfile(ctx context.Context, viewerID uuid.UUID, usernam
 		return Profile{}, err
 	}
 
+	oldAvatarObjectKey := ""
+	if normalizedInput.RemoveCustomAvatar {
+		oldAvatarObjectKey, err = s.repository.GetAvatarObjectKey(ctx, viewerID)
+		if err != nil {
+			return Profile{}, err
+		}
+	}
+
 	profile, err := s.repository.UpdateProfile(ctx, viewerID, normalizedUsername, normalizedInput)
 	if err != nil {
 		return Profile{}, err
 	}
+	if normalizedInput.RemoveCustomAvatar && s.avatarStorage != nil && oldAvatarObjectKey != "" {
+		_ = s.avatarStorage.Delete(ctx, oldAvatarObjectKey)
+	}
 
 	return applyProfileDefaults(profile), nil
+}
+
+func (s *Service) UpdateAvatar(ctx context.Context, viewerID uuid.UUID, username string, input UpdateAvatarInput) (Profile, error) {
+	if viewerID == uuid.Nil {
+		return Profile{}, fmt.Errorf("%w: viewer is required", ErrForbidden)
+	}
+	if s.avatarStorage == nil {
+		return Profile{}, fmt.Errorf("%w: avatar storage is not configured", ErrUnavailable)
+	}
+
+	normalizedUsername := strings.TrimSpace(username)
+	if normalizedUsername == "" {
+		return Profile{}, fmt.Errorf("%w: username is required", ErrInvalidInput)
+	}
+
+	contentType, extension, err := normalizeAvatarUpload(input)
+	if err != nil {
+		return Profile{}, err
+	}
+
+	key := fmt.Sprintf("avatars/%s/%s.%s", viewerID.String(), uuid.NewString(), extension)
+	avatarURL, err := s.avatarStorage.Put(
+		ctx,
+		key,
+		bytes.NewReader(input.Content),
+		int64(len(input.Content)),
+		contentType,
+	)
+	if err != nil {
+		return Profile{}, fmt.Errorf("upload avatar: %w", err)
+	}
+
+	profile, oldAvatarObjectKey, err := s.repository.UpdateCustomAvatar(
+		ctx,
+		viewerID,
+		normalizedUsername,
+		avatarURL,
+		key,
+	)
+	if err != nil {
+		_ = s.avatarStorage.Delete(ctx, key)
+		return Profile{}, err
+	}
+	if oldAvatarObjectKey != "" && oldAvatarObjectKey != key {
+		_ = s.avatarStorage.Delete(ctx, oldAvatarObjectKey)
+	}
+
+	return applyProfileDefaults(profile), nil
+}
+
+func normalizeAvatarUpload(input UpdateAvatarInput) (string, string, error) {
+	if len(input.Content) == 0 {
+		return "", "", fmt.Errorf("%w: avatar file is required", ErrInvalidInput)
+	}
+	if len(input.Content) > maxAvatarFileSize {
+		return "", "", fmt.Errorf("%w: avatar file must be 2 MB or smaller", ErrInvalidInput)
+	}
+
+	contentType := strings.ToLower(strings.TrimSpace(input.ContentType))
+	extension, ok := avatarFileExtensions[contentType]
+	if !ok {
+		return "", "", fmt.Errorf("%w: avatar must be jpg, jpeg, png, or gif", ErrInvalidInput)
+	}
+
+	return contentType, extension, nil
 }
 
 func normalizeUpdateProfileInput(input UpdateProfileInput) (UpdateProfileInput, error) {

@@ -88,3 +88,8 @@ type UpdateProfileInput struct {
 	AvatarDataURL      string `json:"avatarDataUrl"`
 	RemoveCustomAvatar bool   `json:"removeCustomAvatar"`
 }
+
+type UpdateAvatarInput struct {
+	Content     []byte
+	ContentType string
+}
