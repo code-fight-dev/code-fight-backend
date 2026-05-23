@@ -13,6 +13,7 @@ import (
 	"code-fight-backend/internal/judge"
 	"code-fight-backend/internal/leaderboard"
 	"code-fight-backend/internal/matches"
+	"code-fight-backend/internal/metrics"
 	"code-fight-backend/internal/objectstorage"
 	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
@@ -78,8 +79,10 @@ func main() {
 		avatarStorage = r2Client
 	}
 
+	backendMetrics := metrics.NewBackendMetrics()
+
 	usersRepository := users.NewRepository(db)
-	usersService := users.NewService(usersRepository, avatarStorage)
+	usersService := users.NewService(usersRepository, avatarStorage, backendMetrics)
 	usersHandler := users.NewHandler(usersService, authService, cfg.SessionCookieName)
 
 	judgeHTTPClient := judge.NewHTTPClient(cfg.JudgeBaseURL, cfg.JudgeTimeout, cfg.JudgeAPIToken)
@@ -99,6 +102,7 @@ func main() {
 		submissionsMatchReader,
 	)
 	matchesService.SetNotifier(realtimeBroker)
+	matchesService.SetMetrics(backendMetrics)
 	matchesHandler := matches.NewHandler(matchesService, cfg.MatchDuration)
 
 	tasksRepo := tasks.NewRepository(db)
@@ -118,6 +122,7 @@ func main() {
 		cfg.JudgeCallbackURL,
 		cfg.JudgeCallbackToken,
 		cfg.MaxSourceCodeBytes,
+		backendMetrics,
 	)
 	submissionsService.SetNotifier(realtimeBroker)
 	submissionsHandler := submissions.NewHandler(
@@ -144,6 +149,7 @@ func main() {
 		matchesHandler,
 		realtimeHandler,
 		submissionsHandler,
+		backendMetrics,
 		db,
 	)
 

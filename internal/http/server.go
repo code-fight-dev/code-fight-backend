@@ -9,6 +9,7 @@ import (
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/leaderboard"
 	"code-fight-backend/internal/matches"
+	"code-fight-backend/internal/metrics"
 	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
@@ -30,6 +31,7 @@ func New(
 	matchesHandler *matches.Handler,
 	realtimeHandler *realtime.Handler,
 	submissionsHandler *submissions.Handler,
+	backendMetrics *metrics.BackendMetrics,
 	db *pgxpool.Pool,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
@@ -39,6 +41,10 @@ func New(
 
 	app.Use(recover.New())
 	app.Use(logger.New())
+	if backendMetrics != nil {
+		app.Use(backendMetrics.Middleware())
+		app.Get("/metrics", backendMetrics.Handler())
+	}
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     strings.Join(cfg.AllowedOrigins, ","),
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Judge-Token",

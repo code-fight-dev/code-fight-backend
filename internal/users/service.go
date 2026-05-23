@@ -27,6 +27,10 @@ type AvatarStorage interface {
 	Delete(ctx context.Context, key string) error
 }
 
+type AvatarMetrics interface {
+	RecordAvatarUpload(status string)
+}
+
 var allowedAvatarDataURLPrefixes = []string{
 	"data:image/jpeg;base64,",
 	"data:image/jpg;base64,",
@@ -43,10 +47,15 @@ var avatarFileExtensions = map[string]string{
 type Service struct {
 	repository    *Repository
 	avatarStorage AvatarStorage
+	avatarMetrics AvatarMetrics
 }
 
-func NewService(repository *Repository, avatarStorage AvatarStorage) *Service {
-	return &Service{repository: repository, avatarStorage: avatarStorage}
+func NewService(repository *Repository, avatarStorage AvatarStorage, avatarMetrics AvatarMetrics) *Service {
+	return &Service{
+		repository:    repository,
+		avatarStorage: avatarStorage,
+		avatarMetrics: avatarMetrics,
+	}
 }
 
 func (s *Service) GetProfileByUsername(ctx context.Context, username string) (Profile, error) {
@@ -99,9 +108,11 @@ func (s *Service) UpdateProfile(ctx context.Context, viewerID uuid.UUID, usernam
 
 func (s *Service) UpdateAvatar(ctx context.Context, viewerID uuid.UUID, username string, input UpdateAvatarInput) (Profile, error) {
 	if viewerID == uuid.Nil {
+		s.recordAvatarUpload("forbidden")
 		return Profile{}, fmt.Errorf("%w: viewer is required", ErrForbidden)
 	}
 	if s.avatarStorage == nil {
+		s.recordAvatarUpload("unavailable")
 		return Profile{}, fmt.Errorf("%w: avatar storage is not configured", ErrUnavailable)
 	}
 
@@ -112,6 +123,7 @@ func (s *Service) UpdateAvatar(ctx context.Context, viewerID uuid.UUID, username
 
 	contentType, extension, err := normalizeAvatarUpload(input)
 	if err != nil {
+		s.recordAvatarUpload("invalid")
 		return Profile{}, err
 	}
 
@@ -124,6 +136,7 @@ func (s *Service) UpdateAvatar(ctx context.Context, viewerID uuid.UUID, username
 		contentType,
 	)
 	if err != nil {
+		s.recordAvatarUpload("storage_error")
 		return Profile{}, fmt.Errorf("upload avatar: %w", err)
 	}
 
@@ -136,13 +149,21 @@ func (s *Service) UpdateAvatar(ctx context.Context, viewerID uuid.UUID, username
 	)
 	if err != nil {
 		_ = s.avatarStorage.Delete(ctx, key)
+		s.recordAvatarUpload("database_error")
 		return Profile{}, err
 	}
 	if oldAvatarObjectKey != "" && oldAvatarObjectKey != key {
 		_ = s.avatarStorage.Delete(ctx, oldAvatarObjectKey)
 	}
 
+	s.recordAvatarUpload("success")
 	return applyProfileDefaults(profile), nil
+}
+
+func (s *Service) recordAvatarUpload(status string) {
+	if s.avatarMetrics != nil {
+		s.avatarMetrics.RecordAvatarUpload(status)
+	}
 }
 
 func normalizeAvatarUpload(input UpdateAvatarInput) (string, string, error) {
