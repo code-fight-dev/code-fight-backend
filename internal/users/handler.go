@@ -3,6 +3,8 @@ package users
 import (
 	"context"
 	"errors"
+	"io"
+	stdhttp "net/http"
 	"strings"
 
 	"code-fight-backend/internal/auth"
@@ -35,6 +37,7 @@ func NewHandler(service *Service, authReader currentUserReader, sessionCookieNam
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Get("/:username", h.profileByUsername)
 	router.Patch("/:username", h.updateProfile)
+	router.Post("/:username/avatar", h.updateAvatar)
 }
 
 func (h *Handler) profileByUsername(c *fiber.Ctx) error {
@@ -70,6 +73,51 @@ func (h *Handler) updateProfile(c *fiber.Ctx) error {
 	return c.JSON(profileResponse{Profile: profile})
 }
 
+func (h *Handler) updateAvatar(c *fiber.Ctx) error {
+	currentUser, err := h.authReader.CurrentUser(c.UserContext(), c.Cookies(h.sessionCookieName))
+	if err != nil {
+		return mapServiceError(err)
+	}
+
+	username := strings.TrimSpace(c.Params("username"))
+	if !strings.EqualFold(currentUser.Username, username) {
+		return fiber.NewError(fiber.StatusForbidden, "forbidden")
+	}
+
+	fileHeader, err := c.FormFile("avatar")
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "avatar file is required")
+	}
+	if fileHeader.Size > maxAvatarFileSize {
+		return fiber.NewError(fiber.StatusBadRequest, "avatar file must be 2 MB or smaller")
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "avatar file is invalid")
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(io.LimitReader(file, maxAvatarFileSize+1))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "failed to read avatar file")
+	}
+	if len(content) > maxAvatarFileSize {
+		return fiber.NewError(fiber.StatusBadRequest, "avatar file must be 2 MB or smaller")
+	}
+
+	contentType := stdhttp.DetectContentType(content)
+	profile, err := h.service.UpdateAvatar(c.UserContext(), currentUser.ID, username, UpdateAvatarInput{
+		Content:     content,
+		ContentType: contentType,
+	})
+	if err != nil {
+		return mapServiceError(err)
+	}
+
+	return c.JSON(profileResponse{Profile: profile})
+}
+
 func mapServiceError(err error) error {
 	switch {
 	case errors.Is(err, ErrInvalidInput):
@@ -78,6 +126,8 @@ func mapServiceError(err error) error {
 		return fiber.NewError(fiber.StatusNotFound, err.Error())
 	case errors.Is(err, ErrForbidden):
 		return fiber.NewError(fiber.StatusForbidden, err.Error())
+	case errors.Is(err, ErrUnavailable):
+		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, auth.ErrUnauthorized):
 		return fiber.NewError(fiber.StatusUnauthorized, err.Error())
 	default:

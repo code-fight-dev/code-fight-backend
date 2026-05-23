@@ -22,7 +22,7 @@ const (
 	defaultJudgeBaseURL         = "http://localhost:8090"
 	defaultJudgeTimeout         = "10s"
 	defaultMaxSourceCodeBytes   = 65536
-	defaultMaxBodyBytes         = 1 << 20
+	defaultMaxBodyBytes         = 4 << 20
 	defaultSubmissionRateLimit  = 10
 	defaultSubmissionRateWindow = "1m"
 	defaultMatchDuration        = "20m"
@@ -47,6 +47,11 @@ type Config struct {
 	GitHubSecret           string
 	GoogleClientID         string
 	GoogleSecret           string
+	R2AccountID            string
+	R2AccessKeyID          string
+	R2SecretAccessKey      string
+	R2Bucket               string
+	R2PublicURL            string
 
 	JudgeBaseURL         string
 	JudgeCallbackURL     string
@@ -156,6 +161,15 @@ func Load() (Config, error) {
 	judgeCallbackURL := normalizeBaseURL(valueOrDefault("JUDGE_CALLBACK_URL", backendBaseURL+"/internal/judge/callback"))
 	judgeCallbackToken := strings.TrimSpace(os.Getenv("JUDGE_CALLBACK_TOKEN"))
 	judgeAPIToken := strings.TrimSpace(os.Getenv("JUDGE_API_TOKEN"))
+	r2AccountID := strings.TrimSpace(os.Getenv("R2_ACCOUNT_ID"))
+	r2AccessKeyID := strings.TrimSpace(os.Getenv("R2_ACCESS_KEY_ID"))
+	r2SecretAccessKey := strings.TrimSpace(os.Getenv("R2_SECRET_ACCESS_KEY"))
+	r2Bucket := strings.TrimSpace(os.Getenv("R2_BUCKET"))
+	r2PublicURL := normalizeBaseURL(os.Getenv("R2_PUBLIC_URL"))
+	if anyNonEmpty(r2AccountID, r2AccessKeyID, r2SecretAccessKey, r2Bucket, r2PublicURL) &&
+		!allNonEmpty(r2AccountID, r2AccessKeyID, r2SecretAccessKey, r2Bucket, r2PublicURL) {
+		return Config{}, fmt.Errorf("R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, and R2_PUBLIC_URL must be set together")
+	}
 	if appEnv != "prod" {
 		if judgeCallbackToken == "" {
 			judgeCallbackToken = "dev-judge-callback-token"
@@ -191,6 +205,11 @@ func Load() (Config, error) {
 		GitHubSecret:           strings.TrimSpace(os.Getenv("GITHUB_CLIENT_SECRET")),
 		GoogleClientID:         strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
 		GoogleSecret:           strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET")),
+		R2AccountID:            r2AccountID,
+		R2AccessKeyID:          r2AccessKeyID,
+		R2SecretAccessKey:      r2SecretAccessKey,
+		R2Bucket:               r2Bucket,
+		R2PublicURL:            r2PublicURL,
 
 		JudgeBaseURL:         normalizeBaseURL(valueOrDefault("JUDGE_BASE_URL", defaultJudgeBaseURL)),
 		JudgeCallbackURL:     judgeCallbackURL,
@@ -209,6 +228,10 @@ func Load() (Config, error) {
 
 func (c Config) ListenAddr() string {
 	return "0.0.0.0:" + c.HTTPPort
+}
+
+func (c Config) R2Enabled() bool {
+	return allNonEmpty(c.R2AccountID, c.R2AccessKeyID, c.R2SecretAccessKey, c.R2Bucket, c.R2PublicURL)
 }
 
 func valueOrDefault(key string, fallback string) string {
@@ -238,6 +261,26 @@ func splitCSV(raw string) []string {
 
 func normalizeBaseURL(raw string) string {
 	return strings.TrimRight(strings.TrimSpace(raw), "/")
+}
+
+func anyNonEmpty(values ...string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func allNonEmpty(values ...string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+
+	return true
 }
 
 func parseBoolWithDefault(key string, fallback bool) (bool, error) {

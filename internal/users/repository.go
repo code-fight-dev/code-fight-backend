@@ -27,6 +27,7 @@ const profileRecordSelectQuery = `
 		u.state_province,
 		u.city,
 		u.avatar_url,
+		u.avatar_object_key,
 		u.provider_avatar_url,
 		u.avatar_source,
 		coalesce((
@@ -50,6 +51,7 @@ type profileRecord struct {
 	StateProvince     string
 	City              string
 	AvatarURL         string
+	AvatarObjectKey   string
 	ProviderAvatarURL string
 	AvatarSource      AvatarSource
 	AuthProvider      string
@@ -91,6 +93,11 @@ func (r *Repository) UpdateProfile(ctx context.Context, viewerID uuid.UUID, user
 				when $9 then ''
 				else avatar_url
 			end,
+			avatar_object_key = case
+				when $8 <> '' then ''
+				when $9 then ''
+				else avatar_object_key
+			end,
 			avatar_source = case
 				when $8 <> '' then 'custom'
 				when $9 and provider_avatar_url <> '' then 'provider'
@@ -123,6 +130,82 @@ func (r *Repository) UpdateProfile(ctx context.Context, viewerID uuid.UUID, user
 	}
 
 	return r.buildProfile(ctx, record)
+}
+
+func (r *Repository) GetAvatarObjectKey(ctx context.Context, userID uuid.UUID) (string, error) {
+	const query = `
+		select avatar_object_key
+		from users
+		where id = $1
+	`
+
+	var objectKey string
+	if err := r.db.QueryRow(ctx, query, userID).Scan(&objectKey); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNotFound
+		}
+
+		return "", fmt.Errorf("get avatar object key: %w", err)
+	}
+
+	return objectKey, nil
+}
+
+func (r *Repository) UpdateCustomAvatar(
+	ctx context.Context,
+	viewerID uuid.UUID,
+	username string,
+	avatarURL string,
+	avatarObjectKey string,
+) (Profile, string, error) {
+	ownerID, err := r.getUserIDByUsername(ctx, username)
+	if err != nil {
+		return Profile{}, "", err
+	}
+	if ownerID != viewerID {
+		return Profile{}, "", ErrForbidden
+	}
+
+	const query = `
+		with previous as (
+			select avatar_object_key
+			from users
+			where id = $1
+		),
+		updated as (
+			update users
+			set avatar_url = $2,
+				avatar_object_key = $3,
+				avatar_source = 'custom',
+				updated_at = now()
+			where id = $1
+			returning id
+		)
+		select previous.avatar_object_key
+		from previous
+		join updated on true
+	`
+
+	var oldAvatarObjectKey string
+	if err := r.db.QueryRow(ctx, query, viewerID, avatarURL, avatarObjectKey).Scan(&oldAvatarObjectKey); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Profile{}, "", ErrNotFound
+		}
+
+		return Profile{}, "", fmt.Errorf("update custom avatar: %w", err)
+	}
+
+	record, err := r.getProfileRecordByID(ctx, viewerID)
+	if err != nil {
+		return Profile{}, "", err
+	}
+
+	profile, err := r.buildProfile(ctx, record)
+	if err != nil {
+		return Profile{}, "", err
+	}
+
+	return profile, oldAvatarObjectKey, nil
 }
 
 func (r *Repository) buildProfile(ctx context.Context, record profileRecord) (Profile, error) {
@@ -592,6 +675,7 @@ func scanProfileRecord(row pgx.Row) (profileRecord, error) {
 		&record.StateProvince,
 		&record.City,
 		&record.AvatarURL,
+		&record.AvatarObjectKey,
 		&record.ProviderAvatarURL,
 		&record.AvatarSource,
 		&record.AuthProvider,

@@ -13,6 +13,7 @@ import (
 	"code-fight-backend/internal/judge"
 	"code-fight-backend/internal/leaderboard"
 	"code-fight-backend/internal/matches"
+	"code-fight-backend/internal/objectstorage"
 	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
@@ -61,8 +62,24 @@ func main() {
 		cfg.SessionSecure,
 	)
 
+	var avatarStorage users.AvatarStorage
+	if cfg.R2Enabled() {
+		r2Client, err := objectstorage.NewR2Client(ctx, objectstorage.R2Config{
+			AccountID:       cfg.R2AccountID,
+			AccessKeyID:     cfg.R2AccessKeyID,
+			SecretAccessKey: cfg.R2SecretAccessKey,
+			Bucket:          cfg.R2Bucket,
+			PublicURL:       cfg.R2PublicURL,
+		})
+		if err != nil {
+			logger.Error("create r2 client", "error", err)
+			os.Exit(1)
+		}
+		avatarStorage = r2Client
+	}
+
 	usersRepository := users.NewRepository(db)
-	usersService := users.NewService(usersRepository)
+	usersService := users.NewService(usersRepository, avatarStorage)
 	usersHandler := users.NewHandler(usersService, authService, cfg.SessionCookieName)
 
 	judgeHTTPClient := judge.NewHTTPClient(cfg.JudgeBaseURL, cfg.JudgeTimeout, cfg.JudgeAPIToken)
