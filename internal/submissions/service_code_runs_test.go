@@ -60,6 +60,7 @@ func TestCreateTaskCodeRunSendsOnlySampleTestsToJudge(t *testing.T) {
 		"http://backend/internal/judge/callback",
 		"callback-token",
 		1024*1024,
+		nil,
 	)
 
 	run, err := service.CreateTaskCodeRun(ctx, userID, taskID, CreateCodeRunRequest{
@@ -145,6 +146,7 @@ func TestCreateTaskCodeRunCombinesSampleAndCustomTest(t *testing.T) {
 		"http://backend/internal/judge/callback",
 		"callback-token",
 		1024*1024,
+		nil,
 	)
 
 	_, err := service.CreateTaskCodeRun(ctx, userID, taskID, CreateCodeRunRequest{

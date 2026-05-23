@@ -102,6 +102,7 @@ func main() {
 		submissionsMatchReader,
 	)
 	matchesService.SetNotifier(realtimeBroker)
+	matchesService.SetMetrics(backendMetrics)
 	matchesHandler := matches.NewHandler(matchesService, cfg.MatchDuration)
 
 	tasksRepo := tasks.NewRepository(db)
@@ -121,6 +122,7 @@ func main() {
 		cfg.JudgeCallbackURL,
 		cfg.JudgeCallbackToken,
 		cfg.MaxSourceCodeBytes,
+		backendMetrics,
 	)
 	submissionsService.SetNotifier(realtimeBroker)
 	submissionsHandler := submissions.NewHandler(

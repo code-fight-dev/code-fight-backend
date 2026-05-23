@@ -49,12 +49,19 @@ type Notifier interface {
 	PublishMany(userIDs []uuid.UUID, eventType string, payload any)
 }
 
+type Metrics interface {
+	RecordMatchCreated(taskMode string, ratingMode string, isRated bool)
+	RecordMatchFinished(resultType string, winningReason string, isRated bool)
+	RecordMatchCancelled(source string)
+}
+
 type Service struct {
 	repo             RepositoryInterface
 	taskSelector     TaskSelector
 	submissionReader SubmissionReader
 	pendingTimeout   time.Duration
 	notifier         Notifier
+	metrics          Metrics
 	queueTimersMu    sync.Mutex
 	queueTimers      map[uuid.UUID]*time.Timer
 	publicStatsMu    sync.RWMutex
@@ -78,6 +85,10 @@ func NewService(
 
 func (s *Service) SetNotifier(notifier Notifier) {
 	s.notifier = notifier
+}
+
+func (s *Service) SetMetrics(metrics Metrics) {
+	s.metrics = metrics
 }
 
 func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Match, error) {
@@ -136,6 +147,7 @@ func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Matc
 
 	s.schedulePendingMatchCancel(created.ID)
 	s.publishMatch("match.found", created)
+	s.recordMatchCreated(created)
 
 	return created, nil
 }
@@ -162,6 +174,7 @@ func (s *Service) schedulePendingMatchCancel(matchID uuid.UUID) {
 			return
 		}
 		s.publishMatch("match.cancelled", cancelled)
+		s.recordMatchCancelled("pending_timeout")
 	})
 }
 
@@ -280,6 +293,7 @@ func (s *Service) LeaveQueue(ctx context.Context, userID uuid.UUID) error {
 		return err
 	}
 	s.publishMatch("match.cancelled", cancelled)
+	s.recordMatchCancelled("leave_queue")
 	return nil
 }
 
@@ -454,6 +468,7 @@ func (s *Service) FinishMatch(ctx context.Context, input FinishMatchInput) error
 	match, err := s.repo.GetMatch(ctx, input.MatchID)
 	if err == nil {
 		s.publishMatch("match.finished", match)
+		s.recordMatchFinished(match)
 	}
 	return nil
 }
@@ -482,6 +497,7 @@ func (s *Service) CancelMatch(ctx context.Context, input CancelMatchInput) error
 	cancelled, err := s.repo.GetMatch(ctx, input.MatchID)
 	if err == nil {
 		s.publishMatch("match.cancelled", cancelled)
+		s.recordMatchCancelled("user_cancel")
 	}
 	return nil
 }
@@ -525,6 +541,7 @@ func (s *Service) SurrenderMatch(ctx context.Context, input SurrenderMatchInput)
 	finished, err := s.repo.GetMatch(ctx, match.ID)
 	if err == nil {
 		s.publishMatch("match.finished", finished)
+		s.recordMatchFinished(finished)
 	}
 	return nil
 }
@@ -663,6 +680,7 @@ func (s *Service) ApplySubmissionResult(ctx context.Context, submissionID uuid.U
 	}
 	if finished, err := s.repo.GetMatch(ctx, updatedMatch.ID); err == nil {
 		s.publishMatch("match.finished", finished)
+		s.recordMatchFinished(finished)
 	}
 
 	return nil
@@ -693,6 +711,7 @@ func (s *Service) cancelExpiredPendingMatchOnRead(ctx context.Context, match Mat
 	updated, err := s.repo.GetMatch(ctx, match.ID)
 	if err == nil && updated.Status == MatchStatusCancelled {
 		s.publishMatch("match.cancelled", updated)
+		s.recordMatchCancelled("expired_on_read")
 	}
 	return updated, err
 }
@@ -835,4 +854,34 @@ func (s *Service) publishMatch(eventType string, match Match) {
 		return
 	}
 	s.notifier.PublishMany([]uuid.UUID{match.Player1ID, match.Player2ID}, eventType, match)
+}
+
+func (s *Service) recordMatchCreated(match Match) {
+	if s.metrics != nil {
+		s.metrics.RecordMatchCreated(string(match.TaskMode), match.RatingMode, match.IsRated)
+	}
+}
+
+func (s *Service) recordMatchFinished(match Match) {
+	if s.metrics == nil {
+		return
+	}
+
+	resultType := "unknown"
+	if match.ResultType != nil {
+		resultType = string(*match.ResultType)
+	}
+
+	winningReason := "unknown"
+	if match.WinningReason != nil {
+		winningReason = string(*match.WinningReason)
+	}
+
+	s.metrics.RecordMatchFinished(resultType, winningReason, match.IsRated)
+}
+
+func (s *Service) recordMatchCancelled(source string) {
+	if s.metrics != nil {
+		s.metrics.RecordMatchCancelled(source)
+	}
 }

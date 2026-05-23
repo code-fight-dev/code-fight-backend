@@ -38,6 +38,13 @@ type Notifier interface {
 	PublishMany(userIDs []uuid.UUID, eventType string, payload any)
 }
 
+type Metrics interface {
+	RecordSubmissionCreated(scope string, language string, status string)
+	RecordSubmissionFinished(scope string, language string, status string, verdict string)
+	RecordCodeRunCreated(language string, status string)
+	RecordCodeRunFinished(language string, status string, verdict string)
+}
+
 type Service struct {
 	repo           Repository
 	taskRepo       TaskRepository
@@ -45,6 +52,7 @@ type Service struct {
 	judgeClient    judge.Client
 	matchApplier   MatchResultApplier
 	notifier       Notifier
+	metrics        Metrics
 	callbackURL    string
 	callbackToken  string
 	maxSourceBytes int
@@ -59,6 +67,7 @@ func NewService(
 	callbackURL string,
 	callbackToken string,
 	maxSourceBytes int,
+	metrics Metrics,
 ) *Service {
 	return &Service{
 		repo:           repo,
@@ -66,6 +75,7 @@ func NewService(
 		matchRepo:      matchRepo,
 		judgeClient:    judgeClient,
 		matchApplier:   matchApplier,
+		metrics:        metrics,
 		callbackURL:    callbackURL,
 		callbackToken:  callbackToken,
 		maxSourceBytes: maxSourceBytes,
@@ -142,6 +152,7 @@ func (s *Service) CreateTaskSubmission(
 	if err == nil {
 		s.publishSubmission(ctx, "submission.created", full, tests)
 	}
+	s.recordSubmissionCreated("task", sub.Language, "success")
 	return full, err
 }
 
@@ -210,6 +221,7 @@ func (s *Service) CreateTaskCodeRun(
 	if err == nil {
 		s.publishCodeRun("code_run.created", full, tests)
 	}
+	s.recordCodeRunCreated(run.Language, "success")
 	return full, err
 }
 
@@ -290,6 +302,7 @@ func (s *Service) CreateMatchSubmission(
 	if err == nil {
 		s.publishSubmission(ctx, "submission.created", full, tests)
 	}
+	s.recordSubmissionCreated("match", sub.Language, "success")
 	return full, err
 }
 
@@ -420,6 +433,7 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 		}
 		s.publishSubmission(ctx, eventType, full, fullTests)
 	}
+	s.recordSubmissionFinished(submissionScope(sub), sub.Language, finalStatus, nullableVerdict(payload.Verdict))
 
 	if sub.MatchID != nil && s.matchApplier != nil {
 		submissionID, err := uuid.Parse(sub.ID)
@@ -513,7 +527,48 @@ func (s *Service) HandleCodeRunJudgeCallback(ctx context.Context, payload judge.
 		}
 		s.publishCodeRun(eventType, full, fullTests)
 	}
+	s.recordCodeRunFinished(run.Language, finalStatus, nullableVerdict(payload.Verdict))
 	return nil
+}
+
+func (s *Service) recordSubmissionCreated(scope string, language string, status string) {
+	if s.metrics != nil {
+		s.metrics.RecordSubmissionCreated(scope, strings.TrimSpace(language), status)
+	}
+}
+
+func (s *Service) recordSubmissionFinished(scope string, language string, status string, verdict string) {
+	if s.metrics != nil {
+		s.metrics.RecordSubmissionFinished(scope, strings.TrimSpace(language), status, verdict)
+	}
+}
+
+func (s *Service) recordCodeRunCreated(language string, status string) {
+	if s.metrics != nil {
+		s.metrics.RecordCodeRunCreated(strings.TrimSpace(language), status)
+	}
+}
+
+func (s *Service) recordCodeRunFinished(language string, status string, verdict string) {
+	if s.metrics != nil {
+		s.metrics.RecordCodeRunFinished(strings.TrimSpace(language), status, verdict)
+	}
+}
+
+func submissionScope(sub *Submission) string {
+	if sub != nil && sub.MatchID != nil {
+		return "match"
+	}
+
+	return "task"
+}
+
+func nullableVerdict(verdict *string) string {
+	if verdict == nil || strings.TrimSpace(*verdict) == "" {
+		return "none"
+	}
+
+	return strings.TrimSpace(*verdict)
 }
 
 func (s *Service) validateJudgeCallback(ctx context.Context, sub *Submission, payload judge.CallbackPayload) error {

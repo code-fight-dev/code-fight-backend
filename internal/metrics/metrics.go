@@ -17,6 +17,13 @@ type BackendMetrics struct {
 	httpRequestDuration *prometheus.HistogramVec
 	httpInFlight        prometheus.Gauge
 	avatarUploadsTotal  *prometheus.CounterVec
+	submissionsCreated  *prometheus.CounterVec
+	submissionsFinished *prometheus.CounterVec
+	codeRunsCreated     *prometheus.CounterVec
+	codeRunsFinished    *prometheus.CounterVec
+	matchesCreated      *prometheus.CounterVec
+	matchesFinished     *prometheus.CounterVec
+	matchesCancelled    *prometheus.CounterVec
 }
 
 func NewBackendMetrics() *BackendMetrics {
@@ -50,6 +57,55 @@ func NewBackendMetrics() *BackendMetrics {
 			},
 			[]string{"status"},
 		),
+		submissionsCreated: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "codefight_backend_submissions_created_total",
+				Help: "Total number of task and match submissions created.",
+			},
+			[]string{"scope", "language", "status"},
+		),
+		submissionsFinished: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "codefight_backend_submissions_finished_total",
+				Help: "Total number of task and match submissions completed by judge callback.",
+			},
+			[]string{"scope", "language", "status", "verdict"},
+		),
+		codeRunsCreated: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "codefight_backend_code_runs_created_total",
+				Help: "Total number of code runs created.",
+			},
+			[]string{"language", "status"},
+		),
+		codeRunsFinished: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "codefight_backend_code_runs_finished_total",
+				Help: "Total number of code runs completed by judge callback.",
+			},
+			[]string{"language", "status", "verdict"},
+		),
+		matchesCreated: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "codefight_backend_matches_created_total",
+				Help: "Total number of matches created.",
+			},
+			[]string{"task_mode", "rating_mode", "rated"},
+		),
+		matchesFinished: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "codefight_backend_matches_finished_total",
+				Help: "Total number of matches finished.",
+			},
+			[]string{"result_type", "winning_reason", "rated"},
+		),
+		matchesCancelled: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "codefight_backend_matches_cancelled_total",
+				Help: "Total number of matches cancelled.",
+			},
+			[]string{"source"},
+		),
 	}
 
 	m.registry.MustRegister(
@@ -57,6 +113,13 @@ func NewBackendMetrics() *BackendMetrics {
 		m.httpRequestDuration,
 		m.httpInFlight,
 		m.avatarUploadsTotal,
+		m.submissionsCreated,
+		m.submissionsFinished,
+		m.codeRunsCreated,
+		m.codeRunsFinished,
+		m.matchesCreated,
+		m.matchesFinished,
+		m.matchesCancelled,
 	)
 
 	return m
@@ -101,4 +164,32 @@ func (m *BackendMetrics) Middleware() fiber.Handler {
 
 func (m *BackendMetrics) RecordAvatarUpload(status string) {
 	m.avatarUploadsTotal.WithLabelValues(status).Inc()
+}
+
+func (m *BackendMetrics) RecordSubmissionCreated(scope string, language string, status string) {
+	m.submissionsCreated.WithLabelValues(scope, language, status).Inc()
+}
+
+func (m *BackendMetrics) RecordSubmissionFinished(scope string, language string, status string, verdict string) {
+	m.submissionsFinished.WithLabelValues(scope, language, status, verdict).Inc()
+}
+
+func (m *BackendMetrics) RecordCodeRunCreated(language string, status string) {
+	m.codeRunsCreated.WithLabelValues(language, status).Inc()
+}
+
+func (m *BackendMetrics) RecordCodeRunFinished(language string, status string, verdict string) {
+	m.codeRunsFinished.WithLabelValues(language, status, verdict).Inc()
+}
+
+func (m *BackendMetrics) RecordMatchCreated(taskMode string, ratingMode string, isRated bool) {
+	m.matchesCreated.WithLabelValues(taskMode, ratingMode, strconv.FormatBool(isRated)).Inc()
+}
+
+func (m *BackendMetrics) RecordMatchFinished(resultType string, winningReason string, isRated bool) {
+	m.matchesFinished.WithLabelValues(resultType, winningReason, strconv.FormatBool(isRated)).Inc()
+}
+
+func (m *BackendMetrics) RecordMatchCancelled(source string) {
+	m.matchesCancelled.WithLabelValues(source).Inc()
 }
