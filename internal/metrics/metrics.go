@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -154,7 +155,8 @@ func (m *BackendMetrics) Middleware() fiber.Handler {
 			}
 		}
 
-		method := c.Method()
+		method := strings.Clone(c.Method())
+		path = strings.Clone(path)
 		m.httpRequestsTotal.WithLabelValues(method, path, strconv.Itoa(status)).Inc()
 		m.httpRequestDuration.WithLabelValues(method, path).Observe(time.Since(startedAt).Seconds())
 
