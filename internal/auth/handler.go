@@ -14,6 +14,7 @@ type Handler struct {
 	oauthClient      *OAuthClient
 	frontendBaseURL  string
 	cookieName       string
+	cookieDomain     string
 	oauthStateCookie string
 	sessionTTL       time.Duration
 	oauthStateTTL    time.Duration
@@ -24,12 +25,13 @@ type authResponse struct {
 	User PublicUser `json:"user"`
 }
 
-func NewHandler(service *Service, oauthClient *OAuthClient, frontendBaseURL string, cookieName string, oauthStateCookie string, sessionTTL time.Duration, oauthStateTTL time.Duration, secureCookies bool) *Handler {
+func NewHandler(service *Service, oauthClient *OAuthClient, frontendBaseURL string, cookieName string, cookieDomain string, oauthStateCookie string, sessionTTL time.Duration, oauthStateTTL time.Duration, secureCookies bool) *Handler {
 	return &Handler{
 		service:          service,
 		oauthClient:      oauthClient,
 		frontendBaseURL:  strings.TrimRight(frontendBaseURL, "/"),
 		cookieName:       cookieName,
+		cookieDomain:     strings.TrimSpace(cookieDomain),
 		oauthStateCookie: oauthStateCookie,
 		sessionTTL:       sessionTTL,
 		oauthStateTTL:    oauthStateTTL,
@@ -200,7 +202,7 @@ func (h *Handler) completeOAuth(c *fiber.Ctx) error {
 }
 
 func (h *Handler) setSessionCookie(c *fiber.Ctx, token string, expiresAt time.Time) {
-	c.Cookie(&fiber.Cookie{
+	cookie := &fiber.Cookie{
 		Name:     h.cookieName,
 		Value:    token,
 		Path:     "/",
@@ -209,11 +211,13 @@ func (h *Handler) setSessionCookie(c *fiber.Ctx, token string, expiresAt time.Ti
 		Secure:   h.secureCookies,
 		Expires:  expiresAt,
 		MaxAge:   int(h.sessionTTL.Seconds()),
-	})
+	}
+	h.applyCookieDomain(cookie)
+	c.Cookie(cookie)
 }
 
 func (h *Handler) setOAuthStateCookie(c *fiber.Ctx, provider OAuthProvider, mode string, state string) {
-	c.Cookie(&fiber.Cookie{
+	cookie := &fiber.Cookie{
 		Name:     h.oauthStateCookie,
 		Value:    string(provider) + "|" + mode + "|" + state,
 		Path:     "/",
@@ -222,11 +226,13 @@ func (h *Handler) setOAuthStateCookie(c *fiber.Ctx, provider OAuthProvider, mode
 		Secure:   h.secureCookies,
 		Expires:  time.Now().Add(h.oauthStateTTL),
 		MaxAge:   int(h.oauthStateTTL.Seconds()),
-	})
+	}
+	h.applyCookieDomain(cookie)
+	c.Cookie(cookie)
 }
 
 func (h *Handler) clearOAuthStateCookie(c *fiber.Ctx) {
-	c.Cookie(&fiber.Cookie{
+	cookie := &fiber.Cookie{
 		Name:     h.oauthStateCookie,
 		Value:    "",
 		Path:     "/",
@@ -235,7 +241,9 @@ func (h *Handler) clearOAuthStateCookie(c *fiber.Ctx) {
 		Secure:   h.secureCookies,
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
-	})
+	}
+	h.applyCookieDomain(cookie)
+	c.Cookie(cookie)
 }
 
 func (h *Handler) readOAuthStateCookie(c *fiber.Ctx, provider OAuthProvider) (string, string, error) {
@@ -257,7 +265,7 @@ func (h *Handler) readOAuthStateCookie(c *fiber.Ctx, provider OAuthProvider) (st
 }
 
 func (h *Handler) clearSessionCookie(c *fiber.Ctx) {
-	c.Cookie(&fiber.Cookie{
+	cookie := &fiber.Cookie{
 		Name:     h.cookieName,
 		Value:    "",
 		Path:     "/",
@@ -266,7 +274,15 @@ func (h *Handler) clearSessionCookie(c *fiber.Ctx) {
 		Secure:   h.secureCookies,
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
-	})
+	}
+	h.applyCookieDomain(cookie)
+	c.Cookie(cookie)
+}
+
+func (h *Handler) applyCookieDomain(cookie *fiber.Cookie) {
+	if h.cookieDomain != "" {
+		cookie.Domain = h.cookieDomain
+	}
 }
 
 func (h *Handler) authMode(c *fiber.Ctx) string {

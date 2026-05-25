@@ -38,6 +38,7 @@ type Config struct {
 	FrontendBaseURL        string
 	BackendBaseURL         string
 	SessionCookieName      string
+	SessionCookieDomain    string
 	SessionTTL             time.Duration
 	SessionCleanupInterval time.Duration
 	SessionSecure          bool
@@ -206,6 +207,7 @@ func Load() (Config, error) {
 		FrontendBaseURL:        normalizeBaseURL(valueOrDefault("FRONTEND_PUBLIC_URL", defaultFrontendBaseURL)),
 		BackendBaseURL:         backendBaseURL,
 		SessionCookieName:      valueOrDefault("SESSION_COOKIE_NAME", defaultSessionCookieName),
+		SessionCookieDomain:    strings.TrimSpace(os.Getenv("SESSION_COOKIE_DOMAIN")),
 		SessionTTL:             sessionTTL,
 		SessionCleanupInterval: sessionCleanupInterval,
 		SessionSecure:          sessionSecure,
