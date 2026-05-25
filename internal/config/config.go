@@ -47,6 +47,8 @@ type Config struct {
 	GitHubSecret           string
 	GoogleClientID         string
 	GoogleSecret           string
+	ResendAPIKey           string
+	EmailFrom              string
 	R2AccountID            string
 	R2AccessKeyID          string
 	R2SecretAccessKey      string
@@ -161,6 +163,8 @@ func Load() (Config, error) {
 	judgeCallbackURL := normalizeBaseURL(valueOrDefault("JUDGE_CALLBACK_URL", backendBaseURL+"/internal/judge/callback"))
 	judgeCallbackToken := strings.TrimSpace(os.Getenv("JUDGE_CALLBACK_TOKEN"))
 	judgeAPIToken := strings.TrimSpace(os.Getenv("JUDGE_API_TOKEN"))
+	resendAPIKey := strings.TrimSpace(os.Getenv("RESEND_API_KEY"))
+	emailFrom := strings.TrimSpace(os.Getenv("EMAIL_FROM"))
 	r2AccountID := strings.TrimSpace(os.Getenv("R2_ACCOUNT_ID"))
 	r2AccessKeyID := strings.TrimSpace(os.Getenv("R2_ACCESS_KEY_ID"))
 	r2SecretAccessKey := strings.TrimSpace(os.Getenv("R2_SECRET_ACCESS_KEY"))
@@ -186,6 +190,12 @@ func Load() (Config, error) {
 		if judgeAPIToken == "" {
 			return Config{}, fmt.Errorf("JUDGE_API_TOKEN is required in prod")
 		}
+		if resendAPIKey == "" {
+			return Config{}, fmt.Errorf("RESEND_API_KEY is required in prod")
+		}
+		if emailFrom == "" {
+			return Config{}, fmt.Errorf("EMAIL_FROM is required in prod")
+		}
 	}
 
 	return Config{
@@ -205,6 +215,8 @@ func Load() (Config, error) {
 		GitHubSecret:           strings.TrimSpace(os.Getenv("GITHUB_CLIENT_SECRET")),
 		GoogleClientID:         strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
 		GoogleSecret:           strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET")),
+		ResendAPIKey:           resendAPIKey,
+		EmailFrom:              emailFrom,
 		R2AccountID:            r2AccountID,
 		R2AccessKeyID:          r2AccessKeyID,
 		R2SecretAccessKey:      r2SecretAccessKey,

@@ -35,6 +35,16 @@ type Session struct {
 	CreatedAt time.Time
 }
 
+type PasswordResetCode struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	CodeHash  string
+	ExpiresAt time.Time
+	UsedAt    *time.Time
+	Attempts  int
+	CreatedAt time.Time
+}
+
 type OAuthProvider string
 
 const (
@@ -76,6 +86,16 @@ type SignUpInput struct {
 
 type SignInInput struct {
 	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type PasswordResetRequestInput struct {
+	Email string `json:"email"`
+}
+
+type PasswordResetConfirmInput struct {
+	Email    string `json:"email"`
+	Code     string `json:"code"`
 	Password string `json:"password"`
 }
 

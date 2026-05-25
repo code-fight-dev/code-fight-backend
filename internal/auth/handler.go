@@ -41,6 +41,8 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/sign-up", h.signUp)
 	router.Post("/sign-in", h.signIn)
 	router.Post("/sign-out", h.signOut)
+	router.Post("/password-reset/request", h.requestPasswordReset)
+	router.Post("/password-reset/confirm", h.confirmPasswordReset)
 	router.Get("/me", h.me)
 	router.Get("/oauth/:provider/start", h.startOAuth)
 	router.Get("/oauth/:provider/callback", h.completeOAuth)
@@ -90,6 +92,32 @@ func (h *Handler) signOut(c *fiber.Ctx) error {
 	}
 
 	h.clearSessionCookie(c)
+
+	return c.JSON(fiber.Map{"ok": true})
+}
+
+func (h *Handler) requestPasswordReset(c *fiber.Ctx) error {
+	var input PasswordResetRequestInput
+	if err := c.BodyParser(&input); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+	}
+
+	if err := h.service.RequestPasswordReset(c.UserContext(), input); err != nil {
+		return mapServiceError(err)
+	}
+
+	return c.JSON(fiber.Map{"ok": true})
+}
+
+func (h *Handler) confirmPasswordReset(c *fiber.Ctx) error {
+	var input PasswordResetConfirmInput
+	if err := c.BodyParser(&input); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+	}
+
+	if err := h.service.ConfirmPasswordReset(c.UserContext(), input); err != nil {
+		return mapServiceError(err)
+	}
 
 	return c.JSON(fiber.Map{"ok": true})
 }
@@ -271,6 +299,8 @@ func mapServiceError(err error) error {
 	case errors.Is(err, ErrOAuthUnavailable):
 		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrUnauthorized):
+		return fiber.NewError(fiber.StatusUnauthorized, err.Error())
+	case errors.Is(err, ErrResetCodeInvalid), errors.Is(err, ErrResetCodeExpired):
 		return fiber.NewError(fiber.StatusUnauthorized, err.Error())
 	default:
 		return err
