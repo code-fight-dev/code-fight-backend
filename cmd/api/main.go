@@ -12,6 +12,7 @@ import (
 	httpserver "code-fight-backend/internal/http"
 	"code-fight-backend/internal/judge"
 	"code-fight-backend/internal/leaderboard"
+	"code-fight-backend/internal/mail"
 	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/metrics"
 	"code-fight-backend/internal/objectstorage"
@@ -44,7 +45,17 @@ func main() {
 	}
 
 	authRepository := auth.NewRepository(db)
-	authService := auth.NewService(authRepository, cfg.SessionTTL)
+	passwordResetSender := auth.PasswordResetMailer(mail.NewLogSender(logger))
+	if cfg.ResendAPIKey != "" && cfg.EmailFrom != "" {
+		resendSender, err := mail.NewResendSender(cfg.ResendAPIKey, cfg.EmailFrom)
+		if err != nil {
+			logger.Error("create resend sender", "error", err)
+			os.Exit(1)
+		}
+		passwordResetSender = resendSender
+	}
+
+	authService := auth.NewService(authRepository, cfg.SessionTTL, passwordResetSender)
 	oauthClient := auth.NewOAuthClient(
 		cfg.BackendBaseURL,
 		cfg.GitHubClientID,

@@ -13,4 +13,6 @@ var (
 	ErrOAuthStateInvalid  = errors.New("oauth state is invalid")
 	ErrOAuthEmailRequired = errors.New("oauth provider did not return a verified email")
 	ErrOAuthAccountLinked = errors.New("oauth account is already linked")
+	ErrResetCodeInvalid   = errors.New("password reset code is invalid")
+	ErrResetCodeExpired   = errors.New("password reset code is expired")
 )

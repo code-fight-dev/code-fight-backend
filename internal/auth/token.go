@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
+	"math/big"
 )
 
 func generateSessionToken() (string, string, error) {
@@ -19,4 +21,13 @@ func generateSessionToken() (string, string, error) {
 func hashSessionToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func generatePasswordResetCode() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }

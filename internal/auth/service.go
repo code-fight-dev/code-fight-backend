@@ -18,6 +18,7 @@ const (
 	oauthUsernameMaxAttempts    = 10
 	passwordMaxLength           = 72
 	passwordMinLength           = 8
+	passwordResetCodeTTL        = 10 * time.Minute
 	usernameMinLength           = 3
 	usernameMaxLength           = 24
 )
@@ -29,12 +30,18 @@ var usernamePattern = regexp.MustCompile(
 type Service struct {
 	repository *Repository
 	sessionTTL time.Duration
+	mailer     PasswordResetMailer
 }
 
-func NewService(repository *Repository, sessionTTL time.Duration) *Service {
+type PasswordResetMailer interface {
+	SendPasswordResetCode(ctx context.Context, to string, code string) error
+}
+
+func NewService(repository *Repository, sessionTTL time.Duration, mailer PasswordResetMailer) *Service {
 	return &Service{
 		repository: repository,
 		sessionTTL: sessionTTL,
+		mailer:     mailer,
 	}
 }
 
@@ -179,6 +186,103 @@ func (s *Service) SignOut(ctx context.Context, sessionToken string) error {
 	}
 
 	if err := s.repository.DeleteSessionByTokenHash(ctx, hashSessionToken(sessionToken)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Service) RequestPasswordReset(ctx context.Context, input PasswordResetRequestInput) error {
+	email, err := normalizeEmail(input.Email)
+	if err != nil {
+		return err
+	}
+
+	user, err := s.repository.GetUserByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+
+		return fmt.Errorf("get password reset user by email: %w", err)
+	}
+
+	if s.mailer == nil {
+		return fmt.Errorf("password reset mailer is not configured")
+	}
+
+	code, err := generatePasswordResetCode()
+	if err != nil {
+		return fmt.Errorf("generate password reset code: %w", err)
+	}
+	codeHash, err := hashPassword(code)
+	if err != nil {
+		return fmt.Errorf("hash password reset code: %w", err)
+	}
+
+	_, err = s.repository.CreatePasswordResetCode(ctx, PasswordResetCode{
+		ID:        uuid.New(),
+		UserID:    user.ID,
+		CodeHash:  codeHash,
+		ExpiresAt: time.Now().Add(passwordResetCodeTTL),
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := s.mailer.SendPasswordResetCode(ctx, user.Email, code); err != nil {
+		return fmt.Errorf("send password reset code: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Service) ConfirmPasswordReset(ctx context.Context, input PasswordResetConfirmInput) error {
+	email, code, password, err := normalizePasswordResetConfirmInput(input)
+	if err != nil {
+		return err
+	}
+
+	user, err := s.repository.GetUserByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrResetCodeInvalid
+		}
+
+		return fmt.Errorf("get password reset user by email: %w", err)
+	}
+
+	resetCode, err := s.repository.GetActivePasswordResetCode(ctx, user.ID, time.Now())
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrResetCodeExpired
+		}
+
+		return fmt.Errorf("get active password reset code: %w", err)
+	}
+
+	if resetCode.Attempts >= passwordResetMaxAttempts {
+		_ = s.repository.MarkPasswordResetCodeUsed(ctx, resetCode.ID)
+		return ErrResetCodeInvalid
+	}
+
+	if err := comparePassword(resetCode.CodeHash, code); err != nil {
+		_ = s.repository.IncrementPasswordResetAttempts(ctx, resetCode.ID)
+		return ErrResetCodeInvalid
+	}
+
+	passwordHash, err := hashPassword(password)
+	if err != nil {
+		return fmt.Errorf("hash reset password: %w", err)
+	}
+
+	if err := s.repository.UpdateUserPasswordHash(ctx, user.ID, passwordHash); err != nil {
+		return err
+	}
+	if err := s.repository.MarkPasswordResetCodeUsed(ctx, resetCode.ID); err != nil {
+		return err
+	}
+	if err := s.repository.DeleteSessionsByUserID(ctx, user.ID); err != nil {
 		return err
 	}
 
@@ -330,6 +434,35 @@ func normalizeSignInInput(input SignInInput) (string, string, error) {
 	}
 
 	return email, password, nil
+}
+
+func normalizePasswordResetConfirmInput(input PasswordResetConfirmInput) (string, string, string, error) {
+	email, err := normalizeEmail(input.Email)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	code := strings.TrimSpace(input.Code)
+	if len(code) != 6 {
+		return "", "", "", fmt.Errorf("%w: reset code must be 6 digits", ErrInvalidInput)
+	}
+	for _, r := range code {
+		if r < '0' || r > '9' {
+			return "", "", "", fmt.Errorf("%w: reset code must be 6 digits", ErrInvalidInput)
+		}
+	}
+
+	password := input.Password
+	if len(password) < passwordMinLength || len(password) > passwordMaxLength {
+		return "", "", "", fmt.Errorf(
+			"%w: password must be between %d and %d characters",
+			ErrInvalidInput,
+			passwordMinLength,
+			passwordMaxLength,
+		)
+	}
+
+	return email, code, password, nil
 }
 
 func (s *Service) generateOAuthUsername(ctx context.Context, identity OAuthIdentity) (string, error) {

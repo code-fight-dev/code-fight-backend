@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	defaultGlobalRating    = 1000
-	oauthAccountSelectCols = "id, user_id, provider, provider_user_id, provider_email, created_at"
-	userSelectCols         = "id, email, username, display_name, password_hash, created_at, updated_at"
+	defaultGlobalRating      = 1000
+	oauthAccountSelectCols   = "id, user_id, provider, provider_user_id, provider_email, created_at"
+	passwordResetMaxAttempts = 5
+	userSelectCols           = "id, email, username, display_name, password_hash, created_at, updated_at"
 )
 
 type Repository struct {
@@ -253,6 +254,123 @@ func (r *Repository) DeleteExpiredSessions(ctx context.Context, before time.Time
 		delete from sessions where expires_at <= $1
 	`, before); err != nil {
 		return fmt.Errorf("delete expired sessions: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) DeleteSessionsByUserID(ctx context.Context, userID uuid.UUID) error {
+	if _, err := r.db.Exec(ctx, `
+		delete from sessions where user_id = $1
+	`, userID); err != nil {
+		return fmt.Errorf("delete user sessions: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) CreatePasswordResetCode(ctx context.Context, resetCode PasswordResetCode) (PasswordResetCode, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return PasswordResetCode{}, fmt.Errorf("begin password reset code creation: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		update password_reset_codes
+		set used_at = now()
+		where user_id = $1 and used_at is null
+	`, resetCode.UserID); err != nil {
+		return PasswordResetCode{}, fmt.Errorf("expire previous password reset codes: %w", err)
+	}
+
+	query := `
+		insert into password_reset_codes (id, user_id, code_hash, expires_at)
+		values ($1, $2, $3, $4)
+		returning id, user_id, code_hash, expires_at, used_at, attempts, created_at
+	`
+
+	if err := tx.QueryRow(ctx, query,
+		resetCode.ID,
+		resetCode.UserID,
+		resetCode.CodeHash,
+		resetCode.ExpiresAt,
+	).Scan(
+		&resetCode.ID,
+		&resetCode.UserID,
+		&resetCode.CodeHash,
+		&resetCode.ExpiresAt,
+		&resetCode.UsedAt,
+		&resetCode.Attempts,
+		&resetCode.CreatedAt,
+	); err != nil {
+		return PasswordResetCode{}, fmt.Errorf("create password reset code: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return PasswordResetCode{}, fmt.Errorf("commit password reset code creation: %w", err)
+	}
+
+	return resetCode, nil
+}
+
+func (r *Repository) GetActivePasswordResetCode(ctx context.Context, userID uuid.UUID, now time.Time) (PasswordResetCode, error) {
+	query := `
+		select id, user_id, code_hash, expires_at, used_at, attempts, created_at
+		from password_reset_codes
+		where user_id = $1 and used_at is null and expires_at > $2
+		order by created_at desc
+		limit 1
+	`
+
+	var resetCode PasswordResetCode
+	if err := r.db.QueryRow(ctx, query, userID, now).Scan(
+		&resetCode.ID,
+		&resetCode.UserID,
+		&resetCode.CodeHash,
+		&resetCode.ExpiresAt,
+		&resetCode.UsedAt,
+		&resetCode.Attempts,
+		&resetCode.CreatedAt,
+	); err != nil {
+		return PasswordResetCode{}, normalizeNotFound(err)
+	}
+
+	return resetCode, nil
+}
+
+func (r *Repository) IncrementPasswordResetAttempts(ctx context.Context, codeID uuid.UUID) error {
+	if _, err := r.db.Exec(ctx, `
+		update password_reset_codes
+		set attempts = attempts + 1
+		where id = $1
+	`, codeID); err != nil {
+		return fmt.Errorf("increment password reset attempts: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) MarkPasswordResetCodeUsed(ctx context.Context, codeID uuid.UUID) error {
+	if _, err := r.db.Exec(ctx, `
+		update password_reset_codes
+		set used_at = now()
+		where id = $1
+	`, codeID); err != nil {
+		return fmt.Errorf("mark password reset code used: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) UpdateUserPasswordHash(ctx context.Context, userID uuid.UUID, passwordHash string) error {
+	if _, err := r.db.Exec(ctx, `
+		update users
+		set password_hash = $2,
+			updated_at = now()
+		where id = $1
+	`, userID, passwordHash); err != nil {
+		return fmt.Errorf("update user password hash: %w", err)
 	}
 
 	return nil
