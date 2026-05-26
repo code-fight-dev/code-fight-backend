@@ -90,7 +90,8 @@ type SignInInput struct {
 }
 
 type PasswordResetRequestInput struct {
-	Email string `json:"email"`
+	Email        string `json:"email"`
+	CaptchaToken string `json:"captchaToken"`
 }
 
 type PasswordResetConfirmInput struct {

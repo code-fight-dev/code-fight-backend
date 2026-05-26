@@ -12,6 +12,7 @@ import (
 type Handler struct {
 	service          *Service
 	oauthClient      *OAuthClient
+	captchaVerifier  CaptchaVerifier
 	frontendBaseURL  string
 	cookieName       string
 	cookieDomain     string
@@ -25,10 +26,11 @@ type authResponse struct {
 	User PublicUser `json:"user"`
 }
 
-func NewHandler(service *Service, oauthClient *OAuthClient, frontendBaseURL string, cookieName string, cookieDomain string, oauthStateCookie string, sessionTTL time.Duration, oauthStateTTL time.Duration, secureCookies bool) *Handler {
+func NewHandler(service *Service, oauthClient *OAuthClient, captchaVerifier CaptchaVerifier, frontendBaseURL string, cookieName string, cookieDomain string, oauthStateCookie string, sessionTTL time.Duration, oauthStateTTL time.Duration, secureCookies bool) *Handler {
 	return &Handler{
 		service:          service,
 		oauthClient:      oauthClient,
+		captchaVerifier:  captchaVerifier,
 		frontendBaseURL:  strings.TrimRight(frontendBaseURL, "/"),
 		cookieName:       cookieName,
 		cookieDomain:     strings.TrimSpace(cookieDomain),
@@ -102,6 +104,12 @@ func (h *Handler) requestPasswordReset(c *fiber.Ctx) error {
 	var input PasswordResetRequestInput
 	if err := c.BodyParser(&input); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+	}
+
+	if h.captchaVerifier != nil {
+		if err := h.captchaVerifier.Verify(c.UserContext(), input.CaptchaToken, c.IP()); err != nil {
+			return mapServiceError(err)
+		}
 	}
 
 	if err := h.service.RequestPasswordReset(c.UserContext(), input); err != nil {
@@ -314,8 +322,12 @@ func mapServiceError(err error) error {
 		return fiber.NewError(fiber.StatusConflict, err.Error())
 	case errors.Is(err, ErrOAuthUnavailable):
 		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, ErrCaptchaUnavailable):
+		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrUnauthorized):
 		return fiber.NewError(fiber.StatusUnauthorized, err.Error())
+	case errors.Is(err, ErrCaptchaInvalid):
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrResetCodeInvalid), errors.Is(err, ErrResetCodeExpired):
 		return fiber.NewError(fiber.StatusUnauthorized, err.Error())
 	default:

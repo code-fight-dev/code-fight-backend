@@ -15,4 +15,6 @@ var (
 	ErrOAuthAccountLinked = errors.New("oauth account is already linked")
 	ErrResetCodeInvalid   = errors.New("password reset code is invalid")
 	ErrResetCodeExpired   = errors.New("password reset code is expired")
+	ErrCaptchaInvalid     = errors.New("captcha verification failed")
+	ErrCaptchaUnavailable = errors.New("captcha verification is unavailable")
 )

@@ -18,6 +18,8 @@ const (
 	defaultBackendBaseURL         = "http://localhost:8080"
 	defaultOAuthStateCookie       = "codefight_oauth_state"
 	defaultOAuthStateTTL          = "10m"
+	defaultGoogleRecaptchaURL     = "https://www.google.com/recaptcha/api/siteverify"
+	defaultGoogleRecaptchaTimeout = "5s"
 
 	defaultJudgeBaseURL         = "http://localhost:8090"
 	defaultJudgeTimeout         = "10s"
@@ -31,30 +33,35 @@ const (
 )
 
 type Config struct {
-	AppEnv                 string
-	HTTPPort               string
-	DatabaseURL            string
-	AllowedOrigins         []string
-	FrontendBaseURL        string
-	BackendBaseURL         string
-	SessionCookieName      string
-	SessionCookieDomain    string
-	SessionTTL             time.Duration
-	SessionCleanupInterval time.Duration
-	SessionSecure          bool
-	OAuthStateCookie       string
-	OAuthStateTTL          time.Duration
-	GitHubClientID         string
-	GitHubSecret           string
-	GoogleClientID         string
-	GoogleSecret           string
-	ResendAPIKey           string
-	EmailFrom              string
-	R2AccountID            string
-	R2AccessKeyID          string
-	R2SecretAccessKey      string
-	R2Bucket               string
-	R2PublicURL            string
+	AppEnv                  string
+	HTTPPort                string
+	DatabaseURL             string
+	AllowedOrigins          []string
+	FrontendBaseURL         string
+	BackendBaseURL          string
+	SessionCookieName       string
+	SessionCookieDomain     string
+	SessionTTL              time.Duration
+	SessionCleanupInterval  time.Duration
+	SessionSecure           bool
+	OAuthStateCookie        string
+	OAuthStateTTL           time.Duration
+	GitHubClientID          string
+	GitHubSecret            string
+	GoogleClientID          string
+	GoogleSecret            string
+	GoogleRecaptchaSecret   string
+	GoogleRecaptchaURL      string
+	GoogleRecaptchaTimeout  time.Duration
+	GoogleRecaptchaMinScore float64
+	GoogleRecaptchaAction   string
+	ResendAPIKey            string
+	EmailFrom               string
+	R2AccountID             string
+	R2AccessKeyID           string
+	R2SecretAccessKey       string
+	R2Bucket                string
+	R2PublicURL             string
 
 	JudgeBaseURL         string
 	JudgeCallbackURL     string
@@ -92,6 +99,22 @@ func Load() (Config, error) {
 	oauthStateTTL, err := time.ParseDuration(valueOrDefault("OAUTH_STATE_TTL", defaultOAuthStateTTL))
 	if err != nil {
 		return Config{}, fmt.Errorf("parse OAUTH_STATE_TTL: %w", err)
+	}
+
+	googleRecaptchaTimeout, err := time.ParseDuration(valueOrDefault("GOOGLE_RECAPTCHA_TIMEOUT", defaultGoogleRecaptchaTimeout))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse GOOGLE_RECAPTCHA_TIMEOUT: %w", err)
+	}
+	if googleRecaptchaTimeout <= 0 {
+		return Config{}, fmt.Errorf("GOOGLE_RECAPTCHA_TIMEOUT must be > 0")
+	}
+
+	googleRecaptchaMinScore, err := parseFloatWithDefault("GOOGLE_RECAPTCHA_MIN_SCORE", 0)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse GOOGLE_RECAPTCHA_MIN_SCORE: %w", err)
+	}
+	if googleRecaptchaMinScore < 0 || googleRecaptchaMinScore > 1 {
+		return Config{}, fmt.Errorf("GOOGLE_RECAPTCHA_MIN_SCORE must be between 0 and 1")
 	}
 
 	sessionSecure, err := parseBoolWithDefault("SESSION_COOKIE_SECURE", appEnv == "prod")
@@ -200,30 +223,35 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		AppEnv:                 appEnv,
-		HTTPPort:               httpPort,
-		DatabaseURL:            databaseURL,
-		AllowedOrigins:         splitCSV(valueOrDefault("ALLOWED_ORIGINS", defaultAllowedOrigins)),
-		FrontendBaseURL:        normalizeBaseURL(valueOrDefault("FRONTEND_PUBLIC_URL", defaultFrontendBaseURL)),
-		BackendBaseURL:         backendBaseURL,
-		SessionCookieName:      valueOrDefault("SESSION_COOKIE_NAME", defaultSessionCookieName),
-		SessionCookieDomain:    strings.TrimSpace(os.Getenv("SESSION_COOKIE_DOMAIN")),
-		SessionTTL:             sessionTTL,
-		SessionCleanupInterval: sessionCleanupInterval,
-		SessionSecure:          sessionSecure,
-		OAuthStateCookie:       valueOrDefault("OAUTH_STATE_COOKIE_NAME", defaultOAuthStateCookie),
-		OAuthStateTTL:          oauthStateTTL,
-		GitHubClientID:         strings.TrimSpace(os.Getenv("GITHUB_CLIENT_ID")),
-		GitHubSecret:           strings.TrimSpace(os.Getenv("GITHUB_CLIENT_SECRET")),
-		GoogleClientID:         strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
-		GoogleSecret:           strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET")),
-		ResendAPIKey:           resendAPIKey,
-		EmailFrom:              emailFrom,
-		R2AccountID:            r2AccountID,
-		R2AccessKeyID:          r2AccessKeyID,
-		R2SecretAccessKey:      r2SecretAccessKey,
-		R2Bucket:               r2Bucket,
-		R2PublicURL:            r2PublicURL,
+		AppEnv:                  appEnv,
+		HTTPPort:                httpPort,
+		DatabaseURL:             databaseURL,
+		AllowedOrigins:          splitCSV(valueOrDefault("ALLOWED_ORIGINS", defaultAllowedOrigins)),
+		FrontendBaseURL:         normalizeBaseURL(valueOrDefault("FRONTEND_PUBLIC_URL", defaultFrontendBaseURL)),
+		BackendBaseURL:          backendBaseURL,
+		SessionCookieName:       valueOrDefault("SESSION_COOKIE_NAME", defaultSessionCookieName),
+		SessionCookieDomain:     strings.TrimSpace(os.Getenv("SESSION_COOKIE_DOMAIN")),
+		SessionTTL:              sessionTTL,
+		SessionCleanupInterval:  sessionCleanupInterval,
+		SessionSecure:           sessionSecure,
+		OAuthStateCookie:        valueOrDefault("OAUTH_STATE_COOKIE_NAME", defaultOAuthStateCookie),
+		OAuthStateTTL:           oauthStateTTL,
+		GitHubClientID:          strings.TrimSpace(os.Getenv("GITHUB_CLIENT_ID")),
+		GitHubSecret:            strings.TrimSpace(os.Getenv("GITHUB_CLIENT_SECRET")),
+		GoogleClientID:          strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
+		GoogleSecret:            strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET")),
+		GoogleRecaptchaSecret:   strings.TrimSpace(os.Getenv("GOOGLE_RECAPTCHA_SECRET")),
+		GoogleRecaptchaURL:      normalizeBaseURL(valueOrDefault("GOOGLE_RECAPTCHA_VERIFY_URL", defaultGoogleRecaptchaURL)),
+		GoogleRecaptchaTimeout:  googleRecaptchaTimeout,
+		GoogleRecaptchaMinScore: googleRecaptchaMinScore,
+		GoogleRecaptchaAction:   strings.TrimSpace(os.Getenv("GOOGLE_RECAPTCHA_EXPECTED_ACTION")),
+		ResendAPIKey:            resendAPIKey,
+		EmailFrom:               emailFrom,
+		R2AccountID:             r2AccountID,
+		R2AccessKeyID:           r2AccessKeyID,
+		R2SecretAccessKey:       r2SecretAccessKey,
+		R2Bucket:                r2Bucket,
+		R2PublicURL:             r2PublicURL,
 
 		JudgeBaseURL:         normalizeBaseURL(valueOrDefault("JUDGE_BASE_URL", defaultJudgeBaseURL)),
 		JudgeCallbackURL:     judgeCallbackURL,
@@ -318,6 +346,20 @@ func parseIntWithDefault(key string, fallback int) (int, error) {
 	}
 
 	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
+	}
+
+	return value, nil
+}
+
+func parseFloatWithDefault(key string, fallback float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+
+	value, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
 		return 0, err
 	}
