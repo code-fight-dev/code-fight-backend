@@ -68,6 +68,7 @@ func main() {
 		oauthClient,
 		cfg.FrontendBaseURL,
 		cfg.SessionCookieName,
+		cfg.SessionCookieDomain,
 		cfg.OAuthStateCookie,
 		cfg.SessionTTL,
 		cfg.OAuthStateTTL,
