@@ -63,9 +63,20 @@ func main() {
 		cfg.GoogleClientID,
 		cfg.GoogleSecret,
 	)
+	var captchaVerifier auth.CaptchaVerifier
+	if cfg.GoogleRecaptchaSecret != "" {
+		captchaVerifier = auth.NewGoogleRecaptchaVerifier(
+			cfg.GoogleRecaptchaSecret,
+			cfg.GoogleRecaptchaURL,
+			cfg.GoogleRecaptchaTimeout,
+			cfg.GoogleRecaptchaMinScore,
+			cfg.GoogleRecaptchaAction,
+		)
+	}
 	authHandler := auth.NewHandler(
 		authService,
 		oauthClient,
+		captchaVerifier,
 		cfg.FrontendBaseURL,
 		cfg.SessionCookieName,
 		cfg.SessionCookieDomain,
