@@ -20,7 +20,13 @@ const (
 )
 
 type Repository struct {
-	db *pgxpool.Pool
+	db authDB
+}
+
+type authDB interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 func NewRepository(db *pgxpool.Pool) *Repository {

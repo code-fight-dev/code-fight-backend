@@ -9,7 +9,11 @@ import (
 )
 
 type PGTaskRepository struct {
-	db *pgxpool.Pool
+	db taskDB
+}
+
+type taskDB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 func NewPGTaskRepository(db *pgxpool.Pool) *PGTaskRepository {

@@ -16,13 +16,19 @@ const (
 )
 
 type Service struct {
-	repo *Repository
+	repo LeaderboardRepository
 
 	pageCacheMu sync.RWMutex
 	pageCache   map[string]cachedPage
 
 	statsCacheMu sync.RWMutex
 	statsCache   map[string]cachedStats
+}
+
+type LeaderboardRepository interface {
+	List(ctx context.Context, mode string, limit int, offset int) ([]Entry, int, error)
+	GetViewerRank(ctx context.Context, mode string, userID uuid.UUID) (*Entry, error)
+	GetStats(ctx context.Context, mode string) (Stats, error)
 }
 
 type cachedPage struct {
@@ -35,7 +41,7 @@ type cachedStats struct {
 	expiresAt time.Time
 }
 
-func NewService(repo *Repository) *Service {
+func NewService(repo LeaderboardRepository) *Service {
 	return &Service{
 		repo:       repo,
 		pageCache:  make(map[string]cachedPage),

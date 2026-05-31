@@ -28,16 +28,37 @@ var usernamePattern = regexp.MustCompile(
 )
 
 type Service struct {
-	repository *Repository
+	repository AuthRepository
 	sessionTTL time.Duration
 	mailer     PasswordResetMailer
+}
+
+type AuthRepository interface {
+	CreateUser(ctx context.Context, user User) (User, error)
+	GetUserByEmail(ctx context.Context, email string) (User, error)
+	GetUserByUsername(ctx context.Context, username string) (User, error)
+	GetUserByID(ctx context.Context, userID uuid.UUID) (User, error)
+	GetOAuthAccount(ctx context.Context, provider OAuthProvider, providerUserID string) (OAuthAccount, error)
+	GetOAuthAccountByUserProvider(ctx context.Context, userID uuid.UUID, provider OAuthProvider) (OAuthAccount, error)
+	CreateOAuthAccount(ctx context.Context, account OAuthAccount) (OAuthAccount, error)
+	UpdateProviderAvatar(ctx context.Context, userID uuid.UUID, avatarURL string) error
+	CreateSession(ctx context.Context, session Session) (Session, error)
+	GetSessionByTokenHash(ctx context.Context, tokenHash string) (Session, error)
+	DeleteSessionByTokenHash(ctx context.Context, tokenHash string) error
+	DeleteExpiredSessions(ctx context.Context, before time.Time) error
+	DeleteSessionsByUserID(ctx context.Context, userID uuid.UUID) error
+	CreatePasswordResetCode(ctx context.Context, resetCode PasswordResetCode) (PasswordResetCode, error)
+	GetActivePasswordResetCode(ctx context.Context, userID uuid.UUID, now time.Time) (PasswordResetCode, error)
+	IncrementPasswordResetAttempts(ctx context.Context, codeID uuid.UUID) error
+	MarkPasswordResetCodeUsed(ctx context.Context, codeID uuid.UUID) error
+	UpdateUserPasswordHash(ctx context.Context, userID uuid.UUID, passwordHash string) error
 }
 
 type PasswordResetMailer interface {
 	SendPasswordResetCode(ctx context.Context, to string, code string) error
 }
 
-func NewService(repository *Repository, sessionTTL time.Duration, mailer PasswordResetMailer) *Service {
+func NewService(repository AuthRepository, sessionTTL time.Duration, mailer PasswordResetMailer) *Service {
 	return &Service{
 		repository: repository,
 		sessionTTL: sessionTTL,

@@ -8,13 +8,20 @@ import (
 	"path"
 	"sort"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-func Migrate(ctx context.Context, db *pgxpool.Pool) error {
+type migrateDB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+func Migrate(ctx context.Context, db migrateDB) error {
 	if _, err := db.Exec(ctx, `
 		create table if not exists schema_migrations (
 			name text primary key,
@@ -75,7 +82,7 @@ func Migrate(ctx context.Context, db *pgxpool.Pool) error {
 	return nil
 }
 
-func migrationApplied(ctx context.Context, db *pgxpool.Pool, name string) (bool, error) {
+func migrationApplied(ctx context.Context, db migrateDB, name string) (bool, error) {
 	var exists bool
 
 	if err := db.QueryRow(ctx, `
