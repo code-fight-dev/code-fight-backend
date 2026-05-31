@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -20,37 +21,60 @@ import (
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
 	"code-fight-backend/internal/users"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	ctx := context.Background()
 
-	cfg, err := config.Load()
-	if err != nil {
-		logger.Error("load config", "error", err)
+	if err := run(ctx, logger); err != nil {
+		logger.Error("api stopped", "error", err)
 		os.Exit(1)
 	}
+}
 
-	db, err := database.Connect(ctx, cfg.DatabaseURL)
-	if err != nil {
-		logger.Error("connect database", "error", err)
-		os.Exit(1)
+var (
+	loadConfig      = config.Load
+	connectDatabase = database.Connect
+	closeDatabase   = func(db *pgxpool.Pool) {
+		db.Close()
 	}
-	defer db.Close()
+	migrateDatabase = func(ctx context.Context, db *pgxpool.Pool) error {
+		return database.Migrate(ctx, db)
+	}
+	newResendSender = mail.NewResendSender
+	newR2Client     = objectstorage.NewR2Client
+	newHTTPApp      = httpserver.New
+	listenHTTPApp   = func(app *fiber.App, addr string) error {
+		return app.Listen(addr)
+	}
+)
 
-	if err := database.Migrate(ctx, db); err != nil {
-		logger.Error("run migrations", "error", err)
-		os.Exit(1)
+func run(ctx context.Context, logger *slog.Logger) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	db, err := connectDatabase(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connect database: %w", err)
+	}
+	defer closeDatabase(db)
+
+	if err := migrateDatabase(ctx, db); err != nil {
+		return fmt.Errorf("run migrations: %w", err)
 	}
 
 	authRepository := auth.NewRepository(db)
 	passwordResetSender := auth.PasswordResetMailer(mail.NewLogSender(logger))
 	if cfg.ResendAPIKey != "" && cfg.EmailFrom != "" {
-		resendSender, err := mail.NewResendSender(cfg.ResendAPIKey, cfg.EmailFrom)
+		resendSender, err := newResendSender(cfg.ResendAPIKey, cfg.EmailFrom)
 		if err != nil {
-			logger.Error("create resend sender", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("create resend sender: %w", err)
 		}
 		passwordResetSender = resendSender
 	}
@@ -80,6 +104,7 @@ func main() {
 		cfg.FrontendBaseURL,
 		cfg.SessionCookieName,
 		cfg.SessionCookieDomain,
+		cfg.SessionCookieSameSite,
 		cfg.OAuthStateCookie,
 		cfg.SessionTTL,
 		cfg.OAuthStateTTL,
@@ -88,7 +113,7 @@ func main() {
 
 	var avatarStorage users.AvatarStorage
 	if cfg.R2Enabled() {
-		r2Client, err := objectstorage.NewR2Client(ctx, objectstorage.R2Config{
+		r2Client, err := newR2Client(ctx, objectstorage.R2Config{
 			AccountID:       cfg.R2AccountID,
 			AccessKeyID:     cfg.R2AccessKeyID,
 			SecretAccessKey: cfg.R2SecretAccessKey,
@@ -96,8 +121,7 @@ func main() {
 			PublicURL:       cfg.R2PublicURL,
 		})
 		if err != nil {
-			logger.Error("create r2 client", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("create r2 client: %w", err)
 		}
 		avatarStorage = r2Client
 	}
@@ -163,7 +187,7 @@ func main() {
 		go startMatchCleanupLoop(cleanupCtx, logger, matchesService, cfg.MatchCleanupInterval, cfg.MatchPendingTimeout)
 	}
 
-	app := httpserver.New(
+	app := newHTTPApp(
 		cfg,
 		authHandler,
 		usersHandler,
@@ -178,13 +202,22 @@ func main() {
 
 	logger.Info("starting api", "addr", cfg.ListenAddr(), "app_env", cfg.AppEnv)
 
-	if err := app.Listen(cfg.ListenAddr()); err != nil {
-		logger.Error("listen", "error", err)
-		os.Exit(1)
+	if err := listenHTTPApp(app, cfg.ListenAddr()); err != nil {
+		return fmt.Errorf("listen: %w", err)
 	}
+	return nil
 }
 
-func startSessionCleanupLoop(ctx context.Context, logger *slog.Logger, authService *auth.Service, interval time.Duration) {
+type sessionCleanupService interface {
+	CleanupExpiredSessions(ctx context.Context) error
+}
+
+type matchCleanupService interface {
+	FinishExpiredMatches(ctx context.Context, now time.Time, limit int) (int, error)
+	CancelExpiredPendingMatches(ctx context.Context, now time.Time, pendingTimeout time.Duration, limit int) (int, error)
+}
+
+func startSessionCleanupLoop(ctx context.Context, logger *slog.Logger, authService sessionCleanupService, interval time.Duration) {
 	if err := authService.CleanupExpiredSessions(ctx); err != nil {
 		logger.Error("cleanup expired sessions", "error", err)
 	}
@@ -207,7 +240,7 @@ func startSessionCleanupLoop(ctx context.Context, logger *slog.Logger, authServi
 func startMatchCleanupLoop(
 	ctx context.Context,
 	logger *slog.Logger,
-	matchesService *matches.Service,
+	matchesService matchCleanupService,
 	interval time.Duration,
 	pendingTimeout time.Duration,
 ) {
