@@ -12,11 +12,20 @@ type JudgeLanguageProvider interface {
 }
 
 type Service struct {
-	repo  *Repository
+	repo  TaskRepository
 	judge JudgeLanguageProvider
 }
 
-func NewService(repo *Repository, judgeProvider JudgeLanguageProvider) *Service {
+type TaskRepository interface {
+	ListChallenges(ctx context.Context) ([]ChallengeListItem, error)
+	ListChallengesForUser(ctx context.Context, userID string) ([]ChallengeListItem, error)
+	GetUserTaskStats(ctx context.Context, userID string) (UserTaskStats, error)
+	ListUserTaskSubmissions(ctx context.Context, taskID string, userID string) ([]TaskSubmission, error)
+	GetChallengeBySlug(ctx context.Context, slug string) (*Challenge, error)
+	GetChallengeByID(ctx context.Context, taskID string) (*Challenge, error)
+}
+
+func NewService(repo TaskRepository, judgeProvider JudgeLanguageProvider) *Service {
 	return &Service{
 		repo:  repo,
 		judge: judgeProvider,

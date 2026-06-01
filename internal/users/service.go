@@ -45,12 +45,19 @@ var avatarFileExtensions = map[string]string{
 }
 
 type Service struct {
-	repository    *Repository
+	repository    UserRepository
 	avatarStorage AvatarStorage
 	avatarMetrics AvatarMetrics
 }
 
-func NewService(repository *Repository, avatarStorage AvatarStorage, avatarMetrics AvatarMetrics) *Service {
+type UserRepository interface {
+	GetProfileByUsername(ctx context.Context, username string) (Profile, error)
+	UpdateProfile(ctx context.Context, viewerID uuid.UUID, username string, input UpdateProfileInput) (Profile, error)
+	GetAvatarObjectKey(ctx context.Context, userID uuid.UUID) (string, error)
+	UpdateCustomAvatar(ctx context.Context, viewerID uuid.UUID, username string, avatarURL string, avatarObjectKey string) (Profile, string, error)
+}
+
+func NewService(repository UserRepository, avatarStorage AvatarStorage, avatarMetrics AvatarMetrics) *Service {
 	return &Service{
 		repository:    repository,
 		avatarStorage: avatarStorage,

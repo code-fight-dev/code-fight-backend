@@ -11,6 +11,7 @@ import (
 const (
 	defaultHTTPPort               = "8080"
 	defaultSessionCookieName      = "codefight_session"
+	defaultSessionCookieSameSite  = "lax"
 	defaultSessionTTL             = "720h"
 	defaultSessionCleanupInterval = "1h"
 	defaultAllowedOrigins         = "http://localhost:3000"
@@ -41,6 +42,7 @@ type Config struct {
 	BackendBaseURL          string
 	SessionCookieName       string
 	SessionCookieDomain     string
+	SessionCookieSameSite   string
 	SessionTTL              time.Duration
 	SessionCleanupInterval  time.Duration
 	SessionSecure           bool
@@ -120,6 +122,14 @@ func Load() (Config, error) {
 	sessionSecure, err := parseBoolWithDefault("SESSION_COOKIE_SECURE", appEnv == "prod")
 	if err != nil {
 		return Config{}, fmt.Errorf("parse SESSION_COOKIE_SECURE: %w", err)
+	}
+
+	sessionCookieSameSite, err := parseSameSiteWithDefault("SESSION_COOKIE_SAME_SITE", defaultSessionCookieSameSite)
+	if err != nil {
+		return Config{}, err
+	}
+	if sessionCookieSameSite == "none" && !sessionSecure {
+		return Config{}, fmt.Errorf("SESSION_COOKIE_SECURE must be true when SESSION_COOKIE_SAME_SITE=none")
 	}
 
 	judgeTimeout, err := time.ParseDuration(valueOrDefault("JUDGE_TIMEOUT", defaultJudgeTimeout))
@@ -231,6 +241,7 @@ func Load() (Config, error) {
 		BackendBaseURL:          backendBaseURL,
 		SessionCookieName:       valueOrDefault("SESSION_COOKIE_NAME", defaultSessionCookieName),
 		SessionCookieDomain:     strings.TrimSpace(os.Getenv("SESSION_COOKIE_DOMAIN")),
+		SessionCookieSameSite:   sessionCookieSameSite,
 		SessionTTL:              sessionTTL,
 		SessionCleanupInterval:  sessionCleanupInterval,
 		SessionSecure:           sessionSecure,
@@ -337,6 +348,16 @@ func parseBoolWithDefault(key string, fallback bool) (bool, error) {
 	}
 
 	return value, nil
+}
+
+func parseSameSiteWithDefault(key string, fallback string) (string, error) {
+	value := strings.ToLower(strings.TrimSpace(valueOrDefault(key, fallback)))
+	switch value {
+	case "lax", "strict", "none":
+		return value, nil
+	default:
+		return "", fmt.Errorf("%s must be one of lax, strict, none", key)
+	}
 }
 
 func parseIntWithDefault(key string, fallback int) (int, error) {

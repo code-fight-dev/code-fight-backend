@@ -10,7 +10,11 @@ import (
 )
 
 type DBTaskSelector struct {
-	db *pgxpool.Pool
+	db taskSelectorDB
+}
+
+type taskSelectorDB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 func NewDBTaskSelector(db *pgxpool.Pool) *DBTaskSelector {

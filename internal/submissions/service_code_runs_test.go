@@ -188,65 +188,146 @@ func TestCreateTaskCodeRunCombinesSampleAndCustomTest(t *testing.T) {
 }
 
 type fakeTaskRepo struct {
-	task    *Task
-	allowed bool
+	task       *Task
+	allowed    bool
+	getErr     error
+	allowedErr error
 }
 
 func (r *fakeTaskRepo) GetByID(context.Context, uuid.UUID) (*Task, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
 	return r.task, nil
 }
 
 func (r *fakeTaskRepo) IsLanguageAllowed(context.Context, uuid.UUID, string, string) (bool, error) {
+	if r.allowedErr != nil {
+		return false, r.allowedErr
+	}
 	return r.allowed, nil
 }
 
 type fakeJudgeClient struct {
 	supported      []judge.SupportedLanguage
+	supportedErr   error
 	submitResponse *judge.SubmitResponse
+	submitErr      error
 	submits        []judge.SubmitRequest
 }
 
 func (c *fakeJudgeClient) Submit(_ context.Context, req judge.SubmitRequest) (*judge.SubmitResponse, error) {
 	c.submits = append(c.submits, req)
+	if c.submitErr != nil {
+		return nil, c.submitErr
+	}
 	return c.submitResponse, nil
 }
 
 func (c *fakeJudgeClient) SupportedLanguages(context.Context) ([]judge.SupportedLanguage, error) {
+	if c.supportedErr != nil {
+		return nil, c.supportedErr
+	}
 	return c.supported, nil
 }
 
 type fakeCodeRunRepo struct {
+	submissions map[string]*Submission
 	runs        map[string]*CodeRun
 	limits      *JudgeTaskLimits
 	sampleTests []JudgeTaskTestCase
 	allTests    []JudgeTaskTestCase
+	createErr   error
+	codeRunErr  error
+	getErr      error
+	getRunErr   error
+	limitsErr   error
+	allTestsErr error
+	samplesErr  error
+	markErr     error
+	markRunErr  error
 }
 
-func (r *fakeCodeRunRepo) Create(_ context.Context, _ *Submission) error {
-	panic("unexpected Create call")
+func (r *fakeCodeRunRepo) Create(_ context.Context, sub *Submission) error {
+	if r.createErr != nil {
+		return r.createErr
+	}
+	if r.submissions == nil {
+		r.submissions = make(map[string]*Submission)
+	}
+	copied := *sub
+	r.submissions[sub.ID] = &copied
+	return nil
 }
 
-func (r *fakeCodeRunRepo) GetByID(context.Context, string) (*Submission, []SubmissionTestResult, error) {
-	panic("unexpected GetByID call")
+func (r *fakeCodeRunRepo) GetByID(_ context.Context, id string) (*Submission, []SubmissionTestResult, error) {
+	if r.getErr != nil {
+		return nil, nil, r.getErr
+	}
+	sub, ok := r.submissions[id]
+	if !ok {
+		return nil, nil, ErrSubmissionNotFound
+	}
+	copied := *sub
+	return &copied, nil, nil
 }
 
-func (r *fakeCodeRunRepo) GetByJudgeSubmissionID(context.Context, string) (*Submission, error) {
+func (r *fakeCodeRunRepo) GetByJudgeSubmissionID(_ context.Context, judgeSubmissionID string) (*Submission, error) {
+	for _, sub := range r.submissions {
+		if sub.JudgeSubmissionID != nil && *sub.JudgeSubmissionID == judgeSubmissionID {
+			copied := *sub
+			return &copied, nil
+		}
+	}
 	return nil, ErrSubmissionNotFound
 }
 
-func (r *fakeCodeRunRepo) MarkSentToJudge(context.Context, string, string, string) error {
-	panic("unexpected MarkSentToJudge call")
+func (r *fakeCodeRunRepo) MarkSentToJudge(_ context.Context, submissionID, judgeSubmissionID, judgeStatus string) error {
+	if r.markErr != nil {
+		return r.markErr
+	}
+	sub, ok := r.submissions[submissionID]
+	if !ok {
+		return ErrSubmissionNotFound
+	}
+	sub.Status = StatusSentToJudge
+	sub.JudgeSubmissionID = &judgeSubmissionID
+	sub.JudgeStatus = &judgeStatus
+	return nil
 }
 
-func (r *fakeCodeRunRepo) MarkRunning(context.Context, string, string, *time.Time) error {
-	panic("unexpected MarkRunning call")
+func (r *fakeCodeRunRepo) MarkRunning(_ context.Context, submissionID, judgeStatus string, startedAt *time.Time) error {
+	sub, ok := r.submissions[submissionID]
+	if !ok {
+		return ErrSubmissionNotFound
+	}
+	sub.Status = StatusRunning
+	sub.JudgeStatus = &judgeStatus
+	sub.StartedAt = startedAt
+	return nil
 }
 
-func (r *fakeCodeRunRepo) Complete(context.Context, string, CompleteInput, []SubmissionTestResult) error {
-	panic("unexpected Complete call")
+func (r *fakeCodeRunRepo) Complete(_ context.Context, submissionID string, input CompleteInput, _ []SubmissionTestResult) error {
+	sub, ok := r.submissions[submissionID]
+	if !ok {
+		return ErrSubmissionNotFound
+	}
+	sub.Status = input.Status
+	sub.JudgeStatus = &input.JudgeStatus
+	sub.Verdict = input.Verdict
+	sub.ErrorMessage = input.ErrorMessage
+	sub.PassedTests = input.PassedTests
+	sub.TotalTests = input.TotalTests
+	sub.Score = input.Score
+	sub.StartedAt = input.StartedAt
+	sub.FinishedAt = input.FinishedAt
+	return nil
 }
 
 func (r *fakeCodeRunRepo) CreateCodeRun(_ context.Context, run *CodeRun) error {
+	if r.codeRunErr != nil {
+		return r.codeRunErr
+	}
 	if r.runs == nil {
 		r.runs = make(map[string]*CodeRun)
 	}
@@ -256,6 +337,9 @@ func (r *fakeCodeRunRepo) CreateCodeRun(_ context.Context, run *CodeRun) error {
 }
 
 func (r *fakeCodeRunRepo) GetCodeRunByID(_ context.Context, id string) (*CodeRun, []CodeRunTestResult, error) {
+	if r.getRunErr != nil {
+		return nil, nil, r.getRunErr
+	}
 	run, ok := r.runs[id]
 	if !ok {
 		return nil, nil, ErrSubmissionNotFound
@@ -275,6 +359,9 @@ func (r *fakeCodeRunRepo) GetCodeRunByJudgeSubmissionID(_ context.Context, judge
 }
 
 func (r *fakeCodeRunRepo) MarkCodeRunSentToJudge(_ context.Context, codeRunID, judgeSubmissionID, judgeStatus string) error {
+	if r.markRunErr != nil {
+		return r.markRunErr
+	}
 	run, ok := r.runs[codeRunID]
 	if !ok {
 		return ErrSubmissionNotFound
@@ -312,13 +399,22 @@ func (r *fakeCodeRunRepo) CompleteCodeRun(_ context.Context, codeRunID string, i
 }
 
 func (r *fakeCodeRunRepo) GetJudgeTaskLimits(context.Context, string) (*JudgeTaskLimits, error) {
+	if r.limitsErr != nil {
+		return nil, r.limitsErr
+	}
 	return r.limits, nil
 }
 
 func (r *fakeCodeRunRepo) ListJudgeTaskTestCases(context.Context, string) ([]JudgeTaskTestCase, error) {
+	if r.allTestsErr != nil {
+		return nil, r.allTestsErr
+	}
 	return r.allTests, nil
 }
 
 func (r *fakeCodeRunRepo) ListJudgeTaskSampleTestCases(context.Context, string) ([]JudgeTaskTestCase, error) {
+	if r.samplesErr != nil {
+		return nil, r.samplesErr
+	}
 	return r.sampleTests, nil
 }

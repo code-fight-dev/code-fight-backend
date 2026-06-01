@@ -16,6 +16,7 @@ type Handler struct {
 	frontendBaseURL  string
 	cookieName       string
 	cookieDomain     string
+	cookieSameSite   string
 	oauthStateCookie string
 	sessionTTL       time.Duration
 	oauthStateTTL    time.Duration
@@ -26,7 +27,7 @@ type authResponse struct {
 	User PublicUser `json:"user"`
 }
 
-func NewHandler(service *Service, oauthClient *OAuthClient, captchaVerifier CaptchaVerifier, frontendBaseURL string, cookieName string, cookieDomain string, oauthStateCookie string, sessionTTL time.Duration, oauthStateTTL time.Duration, secureCookies bool) *Handler {
+func NewHandler(service *Service, oauthClient *OAuthClient, captchaVerifier CaptchaVerifier, frontendBaseURL string, cookieName string, cookieDomain string, cookieSameSite string, oauthStateCookie string, sessionTTL time.Duration, oauthStateTTL time.Duration, secureCookies bool) *Handler {
 	return &Handler{
 		service:          service,
 		oauthClient:      oauthClient,
@@ -34,6 +35,7 @@ func NewHandler(service *Service, oauthClient *OAuthClient, captchaVerifier Capt
 		frontendBaseURL:  strings.TrimRight(frontendBaseURL, "/"),
 		cookieName:       cookieName,
 		cookieDomain:     strings.TrimSpace(cookieDomain),
+		cookieSameSite:   cookieSameSite,
 		oauthStateCookie: oauthStateCookie,
 		sessionTTL:       sessionTTL,
 		oauthStateTTL:    oauthStateTTL,
@@ -215,7 +217,7 @@ func (h *Handler) setSessionCookie(c *fiber.Ctx, token string, expiresAt time.Ti
 		Value:    token,
 		Path:     "/",
 		HTTPOnly: true,
-		SameSite: "lax",
+		SameSite: h.cookieSameSite,
 		Secure:   h.secureCookies,
 		Expires:  expiresAt,
 		MaxAge:   int(h.sessionTTL.Seconds()),
@@ -230,7 +232,7 @@ func (h *Handler) setOAuthStateCookie(c *fiber.Ctx, provider OAuthProvider, mode
 		Value:    string(provider) + "|" + mode + "|" + state,
 		Path:     "/",
 		HTTPOnly: true,
-		SameSite: "lax",
+		SameSite: h.cookieSameSite,
 		Secure:   h.secureCookies,
 		Expires:  time.Now().Add(h.oauthStateTTL),
 		MaxAge:   int(h.oauthStateTTL.Seconds()),
@@ -245,7 +247,7 @@ func (h *Handler) clearOAuthStateCookie(c *fiber.Ctx) {
 		Value:    "",
 		Path:     "/",
 		HTTPOnly: true,
-		SameSite: "lax",
+		SameSite: h.cookieSameSite,
 		Secure:   h.secureCookies,
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
@@ -278,7 +280,7 @@ func (h *Handler) clearSessionCookie(c *fiber.Ctx) {
 		Value:    "",
 		Path:     "/",
 		HTTPOnly: true,
-		SameSite: "lax",
+		SameSite: h.cookieSameSite,
 		Secure:   h.secureCookies,
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,

@@ -14,7 +14,14 @@ import (
 )
 
 type Repository struct {
-	db *pgxpool.Pool
+	db matchDB
+}
+
+type matchDB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
 }
 
 func NewRepository(db *pgxpool.Pool) *Repository {

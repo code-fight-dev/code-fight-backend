@@ -92,6 +92,22 @@ func TestGoogleRecaptchaVerifierVerifyInvalid(t *testing.T) {
 	}
 }
 
+func TestGoogleRecaptchaVerifierDefaultsAndDisabled(t *testing.T) {
+	verifier := NewGoogleRecaptchaVerifier(" ", " ", 0, 0, " password_reset ")
+	if verifier.verifyURL != googleRecaptchaDefaultVerifyURL {
+		t.Fatalf("verifyURL = %q, want default", verifier.verifyURL)
+	}
+	if verifier.httpClient.Timeout != 5*time.Second {
+		t.Fatalf("timeout = %s, want default", verifier.httpClient.Timeout)
+	}
+	if verifier.expectedAction != "password_reset" {
+		t.Fatalf("expectedAction = %q", verifier.expectedAction)
+	}
+	if err := verifier.Verify(context.Background(), "", ""); err != nil {
+		t.Fatalf("disabled verifier returned error: %v", err)
+	}
+}
+
 func TestGoogleRecaptchaVerifierVerifyUnavailable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusBadGateway)
