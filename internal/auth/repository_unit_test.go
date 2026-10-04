@@ -383,7 +383,7 @@ func (r fakePGXRow) Scan(dest ...any) error {
 }
 
 func userRowValues(user User) []any {
-	return []any{user.ID, user.Email, user.Username, user.DisplayName, user.PasswordHash, user.CreatedAt, user.UpdatedAt}
+	return []any{user.ID, user.Email, user.Username, user.DisplayName, user.PasswordHash, user.CreatedAt, user.UpdatedAt, user.Role, user.RoleVersion}
 }
 
 func oauthAccountRowValues(account OAuthAccount) []any {
