@@ -16,6 +16,25 @@ jobs:
     name: Backend checks
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: backend_test
+          POSTGRES_PASSWORD: backend_test
+          POSTGRES_DB: codefight_backend_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U backend_test -d codefight_backend_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      BACKEND_TEST_DATABASE_URL: postgres://backend_test:backend_test@localhost:5432/codefight_backend_test?sslmode=disable
+      BACKEND_REQUIRE_POSTGRES_TESTS: "1"
+
     steps:
       - name: Checkout backend
         uses: actions/checkout@v4
@@ -32,14 +51,17 @@ jobs:
       - name: Go vet
         run: go vet ./...
 
-      - name: Run tests
-        run: go test ./...
+      - name: Run unit and PostgreSQL integration tests
+        run: go test -p 1 -count=1 ./...
 
       - name: Build backend binary
         run: go build -o backend ./cmd/api
 
       - name: Docker build check
         run: docker build -t codefight-backend-ci .
+
+      - name: Check bootstrap CLI in runtime image
+        run: docker run --rm --network none codefight-backend-ci /app/admin-bootstrap -help
 
   deploy:
     name: Deploy backend

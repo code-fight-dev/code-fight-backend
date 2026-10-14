@@ -25,6 +25,7 @@ import (
 	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
+	"code-fight-backend/internal/testsupport"
 	"code-fight-backend/internal/tournament"
 	"code-fight-backend/internal/users"
 
@@ -36,13 +37,7 @@ import (
 
 func isolatedDB(t *testing.T) (*pgxpool.Pool, context.Context) {
 	t.Helper()
-	dsn := os.Getenv("BACKEND_TEST_DATABASE_URL")
-	if dsn == "" {
-		dsn = os.Getenv("TEST_DATABASE_URL")
-	}
-	if dsn == "" {
-		t.Skip("set BACKEND_TEST_DATABASE_URL for PostgreSQL foundation tests (requires CREATEDB)")
-	}
+	dsn := testsupport.PostgresDSN(t)
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal("invalid test database configuration")

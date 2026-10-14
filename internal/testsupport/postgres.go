@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func RequirePostgres(t *testing.T) (*pgxpool.Pool, context.Context) {
+func PostgresDSN(t *testing.T) string {
 	t.Helper()
 
 	dsn := strings.TrimSpace(os.Getenv("BACKEND_TEST_DATABASE_URL"))
@@ -20,8 +20,18 @@ func RequirePostgres(t *testing.T) (*pgxpool.Pool, context.Context) {
 		dsn = strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
 	}
 	if dsn == "" {
+		if os.Getenv("BACKEND_REQUIRE_POSTGRES_TESTS") == "1" {
+			t.Fatal("PostgreSQL integration tests are required; set BACKEND_TEST_DATABASE_URL or TEST_DATABASE_URL")
+		}
 		t.Skip("set BACKEND_TEST_DATABASE_URL or TEST_DATABASE_URL to run Postgres integration tests")
 	}
+	return dsn
+}
+
+func RequirePostgres(t *testing.T) (*pgxpool.Pool, context.Context) {
+	t.Helper()
+
+	dsn := PostgresDSN(t)
 	if !strings.Contains(strings.ToLower(dsn), "test") {
 		t.Fatalf("refusing to run integration tests against a non-test database URL: %s", dsn)
 	}
