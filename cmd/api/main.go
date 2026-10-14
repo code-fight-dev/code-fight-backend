@@ -30,6 +30,7 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
 	ctx := context.Background()
 
 	if err := run(ctx, logger); err != nil {

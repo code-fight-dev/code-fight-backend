@@ -1,11 +1,11 @@
 package managementhttp
 
 import (
-	// "log/slog"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func ErrorBoundary(c *fiber.Ctx) error {
@@ -92,10 +93,27 @@ func Error(c *fiber.Ctx, err error) error {
 	case httpStatus >= 500 && httpStatus < 600:
 		status = httpStatus
 	}
-	// slog.DebugContext(c.UserContext(), "management.request.rejected",
-	// 	"request_id", RequestID(c), "method", c.Method(),
-	// 	"path", c.Path(), "route_template", c.Route().Path,
-	// 	"status", status, "code", code,
-	// )
+	if status >= 500 {
+		slog.ErrorContext(c.UserContext(), "management.request.failed",
+			"request_id", RequestID(c), "method", c.Method(),
+			"route_template", c.Route().Path, "status", status,
+			"error", logError(err),
+		)
+	}
 	return c.Status(status).JSON(fiber.Map{"error": fiber.Map{"code": code, "message": message, "requestId": RequestID(c)}})
+}
+
+func logError(err error) any {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return slog.GroupValue(
+			slog.String("type", "postgres"), slog.String("sqlstate", pgErr.Code),
+			slog.String("table", pgErr.TableName), slog.String("constraint", pgErr.ConstraintName),
+		)
+	}
+	var connectErr *pgconn.ConnectError
+	if errors.As(err, &connectErr) {
+		return "PostgreSQL connection failed"
+	}
+	return err
 }
