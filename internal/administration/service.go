@@ -9,6 +9,7 @@ import (
 
 	"code-fight-backend/internal/access"
 	"code-fight-backend/internal/audit"
+	"code-fight-backend/internal/managementtx"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -49,11 +50,11 @@ func readUser(ctx context.Context, tx pgx.Tx, id uuid.UUID, lock bool) (User, er
 }
 
 func (s *Service) GetUser(ctx context.Context, actorID, targetID uuid.UUID) (User, error) {
-	tx, err := s.db.Begin(ctx)
+	ctx, tx, cleanup, err := managementtx.Begin(ctx, s.db)
 	if err != nil {
 		return User{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer cleanup()
 	actor, err := access.LockActor(ctx, tx, actorID)
 	if err != nil {
 		return User{}, err
@@ -75,11 +76,11 @@ func (s *Service) ChangeRole(ctx context.Context, actorID, targetID uuid.UUID, i
 		input.ExpectedRoleVersion < 1 || !validReason(input.Reason) {
 		return User{}, access.ErrInvalidInput
 	}
-	tx, err := s.db.Begin(ctx)
+	ctx, tx, cleanup, err := managementtx.Begin(ctx, s.db)
 	if err != nil {
 		return User{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer cleanup()
 
 	ids := []uuid.UUID{actorID}
 	if targetID != actorID {
@@ -131,7 +132,8 @@ func (s *Service) ChangeRole(ctx context.Context, actorID, targetID uuid.UUID, i
 var ErrAdminAlreadyExists = errors.New("an admin already exists; bootstrap is disabled")
 
 func validReason(reason string) bool {
-	return utf8.RuneCountInString(reason) >= 1 && utf8.RuneCountInString(reason) <= 500
+	length := utf8.RuneCountInString(reason)
+	return length >= 1 && length <= 500 && !strings.ContainsRune(reason, '\x00')
 }
 
 func (s *Service) BootstrapAdmin(ctx context.Context, targetID uuid.UUID, reason, requestID string) (User, error) {
@@ -139,11 +141,11 @@ func (s *Service) BootstrapAdmin(ctx context.Context, targetID uuid.UUID, reason
 	if targetID == uuid.Nil || !validReason(reason) || requestID == "" {
 		return User{}, access.ErrInvalidInput
 	}
-	tx, err := s.db.Begin(ctx)
+	ctx, tx, cleanup, err := managementtx.Begin(ctx, s.db)
 	if err != nil {
 		return User{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer cleanup()
 	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(172936, 1)`); err != nil {
 		return User{}, err
 	}

@@ -12,6 +12,7 @@ import (
 
 	"code-fight-backend/internal/access"
 	"code-fight-backend/internal/audit"
+	"code-fight-backend/internal/managementtx"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -84,12 +85,19 @@ func mapError(err error) error {
 func normalize(input CreateInput) (CreateInput, error) {
 	input.Slug = strings.ToLower(strings.TrimSpace(input.Slug))
 	input.Title = strings.TrimSpace(input.Title)
-	if len(input.Slug) < 3 || len(input.Slug) > 100 || !slugPattern.MatchString(input.Slug) ||
-		utf8.RuneCountInString(input.Title) < 1 || utf8.RuneCountInString(input.Title) > 200 ||
-		utf8.RuneCountInString(input.Description) > 20000 {
+	if !validSlug(input.Slug) || !validText(input.Title, 1, 200) || !validText(input.Description, 0, 20000) {
 		return CreateInput{}, access.ErrInvalidInput
 	}
 	return input, nil
+}
+
+func validSlug(slug string) bool {
+	return len(slug) >= 3 && len(slug) <= 100 && slugPattern.MatchString(slug)
+}
+
+func validText(value string, min, max int) bool {
+	length := utf8.RuneCountInString(value)
+	return length >= min && length <= max && !strings.ContainsRune(value, '\x00')
 }
 
 func (s *Service) CreateDraft(ctx context.Context, actorID uuid.UUID, input CreateInput, requestID string) (Draft, error) {
@@ -97,11 +105,11 @@ func (s *Service) CreateDraft(ctx context.Context, actorID uuid.UUID, input Crea
 	if err != nil {
 		return Draft{}, err
 	}
-	tx, err := s.db.Begin(ctx)
+	ctx, tx, cleanup, err := managementtx.Begin(ctx, s.db)
 	if err != nil {
 		return Draft{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer cleanup()
 	actor, err := access.LockActor(ctx, tx, actorID)
 	if err != nil {
 		return Draft{}, err
@@ -125,11 +133,11 @@ func (s *Service) CreateDraft(ctx context.Context, actorID uuid.UUID, input Crea
 }
 
 func (s *Service) GetDraft(ctx context.Context, actorID, id uuid.UUID) (Draft, error) {
-	tx, err := s.db.Begin(ctx)
+	ctx, tx, cleanup, err := managementtx.Begin(ctx, s.db)
 	if err != nil {
 		return Draft{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer cleanup()
 	actor, err := access.LockActor(ctx, tx, actorID)
 	if err != nil {
 		return Draft{}, err
@@ -160,11 +168,11 @@ func (s *Service) ListDrafts(ctx context.Context, actorID uuid.UUID, limit int, 
 		}
 		before = &after.CreatedAt
 	}
-	tx, err := s.db.Begin(ctx)
+	ctx, tx, cleanup, err := managementtx.Begin(ctx, s.db)
 	if err != nil {
 		return Page{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer cleanup()
 	actor, err := access.LockActor(ctx, tx, actorID)
 	if err != nil {
 		return Page{}, err
@@ -207,11 +215,16 @@ func (s *Service) UpdateDraft(ctx context.Context, actorID, id uuid.UUID, input 
 	if input.ExpectedConfigVersion < 1 || (input.Slug == nil && input.Title == nil && input.Description == nil) {
 		return Draft{}, access.ErrInvalidInput
 	}
-	tx, err := s.db.Begin(ctx)
+	if input.Slug != nil && !validSlug(strings.ToLower(strings.TrimSpace(*input.Slug))) ||
+		input.Title != nil && !validText(strings.TrimSpace(*input.Title), 1, 200) ||
+		input.Description != nil && !validText(*input.Description, 0, 20000) {
+		return Draft{}, access.ErrInvalidInput
+	}
+	ctx, tx, cleanup, err := managementtx.Begin(ctx, s.db)
 	if err != nil {
 		return Draft{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer cleanup()
 	actor, err := access.LockActor(ctx, tx, actorID)
 	if err != nil {
 		return Draft{}, err
@@ -219,12 +232,10 @@ func (s *Service) UpdateDraft(ctx context.Context, actorID, id uuid.UUID, input 
 	if !access.CanCreateTournament(actor.Role) {
 		return Draft{}, access.ErrForbidden
 	}
-	draft, err := scanDraft(tx.QueryRow(ctx, `select `+columns+` from tournaments where id=$1 for update`, id))
+	draft, err := scanDraft(tx.QueryRow(ctx, `select `+columns+` from tournaments
+        where id=$1 and ($2::boolean or owner_id=$3) for update`, id, actor.Role == access.Admin, actor.ID))
 	if err != nil {
 		return Draft{}, err
-	}
-	if !access.CanManageTournament(actor.Role, actor.ID, draft.OwnerID) {
-		return Draft{}, access.ErrNotFound
 	}
 	if draft.Status != "draft" || draft.ConfigVersion != input.ExpectedConfigVersion {
 		return Draft{}, access.ErrConflict
