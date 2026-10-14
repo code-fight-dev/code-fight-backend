@@ -3,6 +3,8 @@ package auth
 import (
 	"time"
 
+	"code-fight-backend/internal/access"
+
 	"github.com/google/uuid"
 )
 
@@ -14,6 +16,8 @@ const (
 
 type User struct {
 	ID                uuid.UUID
+	Role              access.Role
+	RoleVersion       int64
 	Email             string
 	Username          string
 	DisplayName       string
@@ -72,10 +76,12 @@ type OAuthIdentity struct {
 }
 
 type PublicUser struct {
-	ID        uuid.UUID `json:"id"`
-	Email     string    `json:"email"`
-	Username  string    `json:"username"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID          uuid.UUID   `json:"id"`
+	Role        access.Role `json:"role"`
+	RoleVersion int64       `json:"roleVersion"`
+	Email       string      `json:"email"`
+	Username    string      `json:"username"`
+	CreatedAt   time.Time   `json:"createdAt"`
 }
 
 type SignUpInput struct {
@@ -113,10 +119,12 @@ type AuthResult struct {
 
 func (u User) Public() PublicUser {
 	return PublicUser{
-		ID:        u.ID,
-		Email:     u.Email,
-		Username:  u.Username,
-		CreatedAt: u.CreatedAt,
+		ID:          u.ID,
+		Role:        u.Role,
+		RoleVersion: u.RoleVersion,
+		Email:       u.Email,
+		Username:    u.Username,
+		CreatedAt:   u.CreatedAt,
 	}
 }
 

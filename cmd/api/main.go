@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"code-fight-backend/internal/administration"
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/database"
@@ -20,6 +21,7 @@ import (
 	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
+	"code-fight-backend/internal/tournament"
 	"code-fight-backend/internal/users"
 
 	"github.com/gofiber/fiber/v2"
@@ -28,6 +30,7 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
 	ctx := context.Background()
 
 	if err := run(ctx, logger); err != nil {
@@ -198,6 +201,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		submissionsHandler,
 		backendMetrics,
 		db,
+		administration.NewHandler(administration.NewService(db)),
+		tournament.NewHandler(tournament.NewService(db)),
 	)
 
 	logger.Info("starting api", "addr", cfg.ListenAddr(), "app_env", cfg.AppEnv)

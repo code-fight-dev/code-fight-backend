@@ -5,14 +5,18 @@ import (
 	"strings"
 	"time"
 
+	"code-fight-backend/internal/access"
+	"code-fight-backend/internal/administration"
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/leaderboard"
+	"code-fight-backend/internal/managementhttp"
 	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/metrics"
 	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
+	"code-fight-backend/internal/tournament"
 	"code-fight-backend/internal/users"
 
 	"github.com/gofiber/fiber/v2"
@@ -33,6 +37,8 @@ func New(
 	submissionsHandler *submissions.Handler,
 	backendMetrics *metrics.BackendMetrics,
 	db *pgxpool.Pool,
+	adminHandler *administration.Handler,
+	tournamentHandler *tournament.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: jsonErrorHandler,
@@ -98,6 +104,11 @@ func New(
 		return group
 	}
 
+	// Register before the shared /api origin guard as well as auth/role guards.
+	// Only management routes opt into the structured error contract.
+	app.Use("/api/admin", managementhttp.ErrorBoundary)
+	app.Use("/api/organizer", managementhttp.ErrorBoundary)
+
 	authGroup := protectedGroup("/auth", newAuthLimiter())
 	authHandler.RegisterRoutes(authGroup)
 
@@ -118,6 +129,11 @@ func New(
 
 	eventsGroup := protectedGroup("/api/events", authHandler.RequireAuth)
 	realtimeHandler.RegisterRoutes(eventsGroup)
+
+	adminGroup := protectedGroup("/api/admin", authHandler.RequireAuth, auth.RequireRoles(access.Admin))
+	adminHandler.RegisterRoutes(adminGroup)
+	organizerGroup := protectedGroup("/api/organizer", authHandler.RequireAuth, auth.RequireRoles(access.Organizer, access.Admin))
+	tournamentHandler.RegisterRoutes(organizerGroup)
 
 	submissionsAPIGroup := protectedGroup(
 		"/api",

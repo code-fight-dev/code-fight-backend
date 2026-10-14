@@ -16,7 +16,7 @@ const (
 	defaultGlobalRating      = 1000
 	oauthAccountSelectCols   = "id, user_id, provider, provider_user_id, provider_email, created_at"
 	passwordResetMaxAttempts = 5
-	userSelectCols           = "id, email, username, display_name, password_hash, created_at, updated_at"
+	userSelectCols           = "id, email, username, display_name, password_hash, created_at, updated_at, role, role_version"
 )
 
 type Repository struct {
@@ -77,6 +77,8 @@ func (r *Repository) CreateUser(ctx context.Context, user User) (User, error) {
 		&user.PasswordHash,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.Role,
+		&user.RoleVersion,
 	); err != nil {
 		if isUniqueViolation(err, "users_email_lower_key") {
 			return User{}, ErrEmailTaken
@@ -392,6 +394,8 @@ func scanUser(row pgx.Row) (User, error) {
 		&user.PasswordHash,
 		&user.CreatedAt,
 		&user.UpdatedAt,
+		&user.Role,
+		&user.RoleVersion,
 	); err != nil {
 		return User{}, normalizeNotFound(err)
 	}

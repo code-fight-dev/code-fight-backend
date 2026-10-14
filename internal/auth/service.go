@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"code-fight-backend/internal/access"
+
 	"github.com/google/uuid"
 )
 
@@ -90,6 +92,8 @@ func (s *Service) SignUp(ctx context.Context, input SignUpInput, meta SessionMet
 	}
 
 	user, err := s.repository.CreateUser(ctx, User{
+		Role:         access.User,
+		RoleVersion:  1,
 		ID:           uuid.New(),
 		Email:        email,
 		Username:     username,
@@ -161,6 +165,8 @@ func (s *Service) SignInWithOAuth(ctx context.Context, identity OAuthIdentity, m
 		}
 
 		user, err = s.repository.CreateUser(ctx, User{
+			Role:              access.User,
+			RoleVersion:       1,
 			ID:                uuid.New(),
 			Email:             email,
 			Username:          username,
