@@ -49,13 +49,13 @@ func TestServiceChallengeDetailFiltersLanguagesVersionsAndStarterCode(t *testing
 	if err != nil {
 		t.Fatalf("GetChallengeBySlug returned error: %v", err)
 	}
-	if len(got.SupportedLanguages) != 2 || got.SupportedLanguages[0] != "python" || got.SupportedLanguages[1] != "go" {
+	if len(got.SupportedLanguages) != 1 || got.SupportedLanguages[0] != "go" {
 		t.Fatalf("supported languages = %#v", got.SupportedLanguages)
 	}
 	if len(got.LanguageVersions) != 1 || got.LanguageVersions["go"] != "1.24" {
 		t.Fatalf("versions = %#v", got.LanguageVersions)
 	}
-	if len(got.StarterCodeByLanguage) != 2 || got.StarterCodeByLanguage["go"] == "" || got.StarterCodeByLanguage["python"] == "" {
+	if len(got.StarterCodeByLanguage) != 1 || got.StarterCodeByLanguage["go"] == "" {
 		t.Fatalf("starter code = %#v", got.StarterCodeByLanguage)
 	}
 
@@ -70,7 +70,7 @@ func TestServiceChallengeDetailFiltersLanguagesVersionsAndStarterCode(t *testing
 	if err != nil {
 		t.Fatalf("GetChallengeByID returned error: %v", err)
 	}
-	if got == nil || len(got.SupportedLanguages) != 2 || got.LanguageVersions["go"] != "1.24" {
+	if got == nil || len(got.SupportedLanguages) != 1 || got.LanguageVersions["go"] != "1.24" {
 		t.Fatalf("id challenge = %#v", got)
 	}
 }
@@ -90,6 +90,22 @@ func TestServiceSimpleRepositoryDelegates(t *testing.T) {
 	submissions, err := service.ListUserTaskSubmissions(context.Background(), "task-1", "user-1")
 	if err != nil || len(submissions) != 1 {
 		t.Fatalf("submissions = %#v, %v", submissions, err)
+	}
+}
+
+func TestCustomTaskDoesNotAdvertiseObsoleteRuntimeVersions(t *testing.T) {
+	repo := &fakeTaskRepo{challenge: &Challenge{
+		SupportedLanguages:    []string{"go", "cpp", "javascript", "typescript"},
+		LanguageVersions:      map[string]string{"go": "1.24", "cpp": "gnu++23", "javascript": "node22", "typescript": "5.8"},
+		StarterCodeByLanguage: map[string]string{"go": "func Solve(input string) string { return input }", "cpp": "old cpp", "javascript": "old js", "typescript": "old ts"},
+	}}
+	service := NewService(repo, fakeJudgeLanguages{{Language: "go", Version: "1.24"}, {Language: "cpp", Version: "20"}, {Language: "javascript", Version: "node24"}, {Language: "typescript", Version: "5.9.3"}})
+	challenge, err := service.GetChallengeBySlug(context.Background(), "custom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(challenge.SupportedLanguages) != 1 || challenge.SupportedLanguages[0] != "go" || len(challenge.StarterCodeByLanguage) != 1 {
+		t.Fatalf("challenge=%+v", challenge)
 	}
 }
 
