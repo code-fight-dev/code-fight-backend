@@ -680,6 +680,8 @@ func isAllowedVerdict(verdict string) bool {
 		VerdictWrongAnswer,
 		VerdictTimeLimitExceeded,
 		VerdictMemoryLimitExceeded,
+		VerdictOutputLimitExceeded,
+		VerdictOutputDirectoryLimitExceeded,
 		VerdictRuntimeError,
 		VerdictCompileError,
 		VerdictPresentationError,
@@ -696,6 +698,7 @@ func isAllowedTestStatus(status string) bool {
 		VerdictWrongAnswer,
 		VerdictTimeLimitExceeded,
 		VerdictMemoryLimitExceeded,
+		VerdictOutputLimitExceeded,
 		VerdictRuntimeError,
 		VerdictSystemError,
 		"skipped":

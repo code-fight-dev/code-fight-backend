@@ -102,12 +102,14 @@ const (
 )
 
 const (
-	VerdictAccepted            = "accepted"
-	VerdictWrongAnswer         = "wrong_answer"
-	VerdictTimeLimitExceeded   = "time_limit_exceeded"
-	VerdictMemoryLimitExceeded = "memory_limit_exceeded"
-	VerdictRuntimeError        = "runtime_error"
-	VerdictCompileError        = "compile_error"
-	VerdictPresentationError   = "presentation_error"
-	VerdictSystemError         = "system_error"
+	VerdictAccepted                     = "accepted"
+	VerdictWrongAnswer                  = "wrong_answer"
+	VerdictTimeLimitExceeded            = "time_limit_exceeded"
+	VerdictMemoryLimitExceeded          = "memory_limit_exceeded"
+	VerdictOutputLimitExceeded          = "output_limit_exceeded"
+	VerdictOutputDirectoryLimitExceeded = "output_directory_limit_exceeded"
+	VerdictRuntimeError                 = "runtime_error"
+	VerdictCompileError                 = "compile_error"
+	VerdictPresentationError            = "presentation_error"
+	VerdictSystemError                  = "system_error"
 )

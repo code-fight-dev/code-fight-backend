@@ -94,9 +94,7 @@ func (s *Service) GetChallengeBySlug(ctx context.Context, slug string) (*Challen
 		return nil, err
 	}
 
-	challenge.SupportedLanguages = capabilities.filterLanguages(challenge.SupportedLanguages)
-	challenge.LanguageVersions = capabilities.filterVersions(challenge.LanguageVersions, challenge.SupportedLanguages)
-	challenge.StarterCodeByLanguage = filterStarterCode(challenge.StarterCodeByLanguage, challenge.SupportedLanguages)
+	capabilities.filterChallenge(challenge)
 
 	return challenge, nil
 }
@@ -112,9 +110,7 @@ func (s *Service) GetChallengeByID(ctx context.Context, taskID string) (*Challen
 		return nil, err
 	}
 
-	challenge.SupportedLanguages = capabilities.filterLanguages(challenge.SupportedLanguages)
-	challenge.LanguageVersions = capabilities.filterVersions(challenge.LanguageVersions, challenge.SupportedLanguages)
-	challenge.StarterCodeByLanguage = filterStarterCode(challenge.StarterCodeByLanguage, challenge.SupportedLanguages)
+	capabilities.filterChallenge(challenge)
 
 	return challenge, nil
 }
@@ -145,6 +141,19 @@ func newJudgeCapabilities(supported []judge.SupportedLanguage) judgeCapabilities
 	}
 
 	return judgeCapabilities{versions: versions}
+}
+
+func (c judgeCapabilities) filterChallenge(challenge *Challenge) {
+	challenge.SupportedLanguages = c.filterLanguages(challenge.SupportedLanguages)
+	challenge.LanguageVersions = c.filterVersions(challenge.LanguageVersions, challenge.SupportedLanguages)
+	available := challenge.SupportedLanguages[:0]
+	for _, language := range challenge.SupportedLanguages {
+		if _, ok := challenge.LanguageVersions[language]; ok {
+			available = append(available, language)
+		}
+	}
+	challenge.SupportedLanguages = available
+	challenge.StarterCodeByLanguage = filterStarterCode(challenge.StarterCodeByLanguage, challenge.SupportedLanguages)
 }
 
 func (c judgeCapabilities) filterLanguages(languages []string) []string {
