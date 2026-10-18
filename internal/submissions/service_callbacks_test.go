@@ -221,6 +221,7 @@ func TestHandleJudgeCallbackRunningFailedAndAlreadyFinal(t *testing.T) {
 		JudgeSubmissionID: "judge-sub-state",
 		SubmissionID:      sub.ID,
 		JudgeStatus:       JudgeStatusFailed,
+		StartedAt:         &startedAt,
 		ErrorMessage:      ptrString("boom"),
 		Tests:             []judge.CallbackTestResult{{TestCaseID: "case-1", Status: "skipped"}},
 	}); err != nil {
@@ -328,4 +329,32 @@ func codeRunCallbackRepo() (*fakeCodeRunRepo, *CodeRun) {
 
 func ptrString(value string) *string {
 	return &value
+}
+
+func TestStaleJudgeCallback(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-time.Second)
+	newer := now.Add(time.Second)
+	for _, tc := range []struct {
+		name, status      string
+		current, incoming *time.Time
+		want              bool
+	}{
+		{"first legacy", StatusSentToJudge, nil, nil, false},
+		{"first attempt", StatusSentToJudge, nil, &now, false},
+		{"older attempt", StatusRunning, &now, &old, true},
+		{"missing marker", StatusRunning, &now, nil, true},
+		{"same attempt", StatusRunning, &now, &now, false},
+		{"newer attempt", StatusRunning, &now, &newer, false},
+		{"duplicate final", StatusFinished, &now, &now, true},
+		{"stale final", StatusFailed, &now, &old, true},
+		{"legacy final", StatusFinished, nil, nil, true},
+		{"retry after final", StatusFailed, &now, &newer, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := staleJudgeCallback(tc.status, tc.current, tc.incoming); got != tc.want {
+				t.Fatalf("stale=%v want=%v", got, tc.want)
+			}
+		})
+	}
 }

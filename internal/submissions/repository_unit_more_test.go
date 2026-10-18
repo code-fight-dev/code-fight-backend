@@ -174,15 +174,15 @@ func TestPGRepositoryCompleteTransactions(t *testing.T) {
 	}
 }
 
-func TestPGRepositoryCompleteReturnsNotFoundOnMissingUpdate(t *testing.T) {
+func TestPGRepositoryCompleteIgnoresUnappliedCallback(t *testing.T) {
 	repo := &PGRepository{db: &fakeSubmissionsDB{tx: &fakeSubmissionsTx{
 		execTags: []pgconn.CommandTag{pgconn.NewCommandTag("UPDATE 0"), pgconn.NewCommandTag("UPDATE 0")},
 	}}}
 
-	if err := repo.Complete(context.Background(), "missing", CompleteInput{}, nil); !errors.Is(err, ErrSubmissionNotFound) {
+	if err := repo.Complete(context.Background(), "missing", CompleteInput{}, nil); !errors.Is(err, ErrStaleJudgeCallback) {
 		t.Fatalf("Complete error = %v", err)
 	}
-	if err := repo.CompleteCodeRun(context.Background(), "missing", CompleteInput{}, nil); !errors.Is(err, ErrSubmissionNotFound) {
+	if err := repo.CompleteCodeRun(context.Background(), "missing", CompleteInput{}, nil); !errors.Is(err, ErrStaleJudgeCallback) {
 		t.Fatalf("CompleteCodeRun error = %v", err)
 	}
 }
