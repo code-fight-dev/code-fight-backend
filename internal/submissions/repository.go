@@ -326,7 +326,9 @@ set
     started_at = $16,
     finished_at = $17,
     updated_at = now()
-where id = $1`
+where id = $1
+  and (started_at is null or started_at <= $16)
+  and (status not in ('finished', 'failed') or started_at < $16)`
 
 	ct, err := tx.Exec(ctx, uq,
 		submissionID,
@@ -351,7 +353,7 @@ where id = $1`
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrSubmissionNotFound
+		return ErrStaleJudgeCallback
 	}
 
 	if _, err := tx.Exec(ctx, `delete from submission_test_results where submission_id = $1`, submissionID); err != nil {
@@ -410,7 +412,9 @@ set
     started_at = $16,
     finished_at = $17,
     updated_at = now()
-where id = $1`
+where id = $1
+  and (started_at is null or started_at <= $16)
+  and (status not in ('finished', 'failed') or started_at < $16)`
 
 	ct, err := tx.Exec(ctx, uq,
 		codeRunID,
@@ -435,7 +439,7 @@ where id = $1`
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrSubmissionNotFound
+		return ErrStaleJudgeCallback
 	}
 
 	if _, err := tx.Exec(ctx, `delete from code_run_test_results where code_run_id = $1`, codeRunID); err != nil {
@@ -689,17 +693,18 @@ update submissions
 set
     status = 'running',
     judge_status = $2,
-    started_at = coalesce(started_at, $3, now()),
+    started_at = coalesce($3, started_at),
     updated_at = now()
 where id = $1
-  and status not in ('finished', 'failed')`
+  and (started_at is null or started_at <= $3)
+  and (status not in ('finished', 'failed') or started_at < $3)`
 
 	ct, err := r.db.Exec(ctx, q, submissionID, judgeStatus, startedAt)
 	if err != nil {
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		return nil
+		return ErrStaleJudgeCallback
 	}
 	return nil
 }
@@ -710,17 +715,18 @@ update code_runs
 set
     status = 'running',
     judge_status = $2,
-    started_at = coalesce(started_at, $3, now()),
+    started_at = coalesce($3, started_at),
     updated_at = now()
 where id = $1
-  and status not in ('finished', 'failed')`
+  and (started_at is null or started_at <= $3)
+  and (status not in ('finished', 'failed') or started_at < $3)`
 
 	ct, err := r.db.Exec(ctx, q, codeRunID, judgeStatus, startedAt)
 	if err != nil {
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		return nil
+		return ErrStaleJudgeCallback
 	}
 	return nil
 }

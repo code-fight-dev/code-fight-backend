@@ -367,12 +367,15 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 		return err
 	}
 
-	if sub.Status == StatusFinished || sub.Status == StatusFailed {
+	if staleJudgeCallback(sub.Status, sub.StartedAt, payload.StartedAt) {
 		return nil
 	}
 
 	if payload.JudgeStatus == JudgeStatusRunning {
 		if err := s.repo.MarkRunning(ctx, sub.ID, payload.JudgeStatus, payload.StartedAt); err != nil {
+			if errors.Is(err, ErrStaleJudgeCallback) {
+				return nil
+			}
 			return err
 		}
 		full, tests, err := s.repo.GetByID(ctx, sub.ID)
@@ -423,6 +426,9 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 		FinishedAt:      payload.FinishedAt,
 	}, tests)
 	if err != nil {
+		if errors.Is(err, ErrStaleJudgeCallback) {
+			return nil
+		}
 		return err
 	}
 	full, fullTests, err := s.repo.GetByID(ctx, sub.ID)
@@ -459,12 +465,15 @@ func (s *Service) HandleCodeRunJudgeCallback(ctx context.Context, payload judge.
 		return err
 	}
 
-	if run.Status == StatusFinished || run.Status == StatusFailed {
+	if staleJudgeCallback(run.Status, run.StartedAt, payload.StartedAt) {
 		return nil
 	}
 
 	if payload.JudgeStatus == JudgeStatusRunning {
 		if err := s.repo.MarkCodeRunRunning(ctx, run.ID, payload.JudgeStatus, payload.StartedAt); err != nil {
+			if errors.Is(err, ErrStaleJudgeCallback) {
+				return nil
+			}
 			return err
 		}
 		full, tests, err := s.repo.GetCodeRunByID(ctx, run.ID)
@@ -517,6 +526,9 @@ func (s *Service) HandleCodeRunJudgeCallback(ctx context.Context, payload judge.
 		StartedAt:       payload.StartedAt,
 		FinishedAt:      payload.FinishedAt,
 	}, tests); err != nil {
+		if errors.Is(err, ErrStaleJudgeCallback) {
+			return nil
+		}
 		return err
 	}
 	full, fullTests, err := s.repo.GetCodeRunByID(ctx, run.ID)
@@ -987,4 +999,12 @@ func (s *Service) publishCodeRun(eventType string, run *CodeRun, tests []CodeRun
 	}
 
 	s.notifier.Publish(userID, eventType, ToCodeRunResponse(run, tests))
+}
+
+func staleJudgeCallback(status string, current, incoming *time.Time) bool {
+	if current != nil && (incoming == nil || incoming.Before(*current)) {
+		return true
+	}
+	return (status == StatusFinished || status == StatusFailed) &&
+		(current == nil || incoming == nil || !incoming.After(*current))
 }

@@ -2,6 +2,7 @@ package submissions
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -101,6 +102,7 @@ func TestPGRepositoryIntegrationSubmissionAndCodeRunLifecycle(t *testing.T) {
 		PassedTests: 1,
 		TotalTests:  1,
 		Score:       100,
+		StartedAt:   &startedAt,
 	}, []CodeRunTestResult{
 		{CodeRunID: run.ID, TestCaseID: &sampleTestIDString, Status: VerdictAccepted},
 		{CodeRunID: run.ID, TestName: &testName, IsCustom: true, Status: VerdictAccepted},
@@ -136,6 +138,80 @@ func TestPGRepositoryIntegrationJudgeTaskReaders(t *testing.T) {
 	sampleTests, err := repo.ListJudgeTaskSampleTestCases(ctx, taskID.String())
 	if err != nil || len(sampleTests) != 1 {
 		t.Fatalf("ListJudgeTaskSampleTestCases = %#v, %v", sampleTests, err)
+	}
+}
+
+func TestPGRepositoryIntegrationCallbackAttemptOrdering(t *testing.T) {
+	db, ctx := testsupport.RequirePostgres(t)
+	repo := NewPGRepository(db)
+	userID := createSubmissionTestUser(t, db, ctx)
+	taskID, testID, _ := createSubmissionTestTask(t, db, ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old, newer := now.Add(-time.Second), now.Add(time.Second)
+	for _, table := range []string{"submissions", "code_runs"} {
+		t.Run(table, func(t *testing.T) {
+			id := uuid.NewString()
+			_, err := db.Exec(ctx, `insert into `+table+` (id, task_id, user_id, language, language_version, source_code, status, created_at, updated_at)
+				values ($1, $2, $3, 'go', '1.24', 'package main', 'sent_to_judge', now(), now())`, id, taskID, userID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mark := repo.MarkRunning
+			resultsTable, foreignKey := "submission_test_results", "submission_id"
+			if table == "code_runs" {
+				mark = repo.MarkCodeRunRunning
+				resultsTable, foreignKey = "code_run_test_results", "code_run_id"
+			}
+			finish := func(at *time.Time) error {
+				verdict := VerdictAccepted
+				input := CompleteInput{Status: StatusFinished, JudgeStatus: JudgeStatusFinished, Verdict: &verdict, StartedAt: at, Score: 100}
+				if table == "submissions" {
+					return repo.Complete(ctx, id, input, []SubmissionTestResult{{SubmissionID: id, TestCaseID: testID.String(), Status: VerdictAccepted}})
+				}
+				testIDString := testID.String()
+				return repo.CompleteCodeRun(ctx, id, input, []CodeRunTestResult{{CodeRunID: id, TestCaseID: &testIDString, Status: VerdictAccepted}})
+			}
+			if err := mark(ctx, id, JudgeStatusRunning, &old); err != nil {
+				t.Fatal(err)
+			}
+			if err := mark(ctx, id, JudgeStatusRunning, &now); err != nil {
+				t.Fatal(err)
+			}
+			for _, at := range []*time.Time{&old, nil} {
+				if err := mark(ctx, id, JudgeStatusRunning, at); !errors.Is(err, ErrStaleJudgeCallback) {
+					t.Fatalf("stale running: %v", err)
+				}
+				if err := finish(at); !errors.Is(err, ErrStaleJudgeCallback) {
+					t.Fatalf("stale completion: %v", err)
+				}
+			}
+			if err := finish(&now); err != nil {
+				t.Fatal(err)
+			}
+			var resultID string
+			if err := db.QueryRow(ctx, `select id from `+resultsTable+` where `+foreignKey+`=$1`, id).Scan(&resultID); err != nil {
+				t.Fatal(err)
+			}
+			for _, at := range []*time.Time{&old, &now, nil} {
+				if err := finish(at); !errors.Is(err, ErrStaleJudgeCallback) {
+					t.Fatalf("duplicate/stale completion: %v", err)
+				}
+			}
+			var preserved bool
+			if err := db.QueryRow(ctx, `select exists(select 1 from `+resultsTable+` where id=$1)`, resultID).Scan(&preserved); err != nil || !preserved {
+				t.Fatalf("stale callback replaced test results: preserved=%v err=%v", preserved, err)
+			}
+			if err := mark(ctx, id, JudgeStatusRunning, &newer); err != nil {
+				t.Fatal(err)
+			}
+			if err := finish(&newer); err != nil {
+				t.Fatal(err)
+			}
+			var stored time.Time
+			if err := db.QueryRow(ctx, `select started_at from `+table+` where id=$1`, id).Scan(&stored); err != nil || !stored.Equal(newer) {
+				t.Fatalf("latest attempt=%v want=%v err=%v", stored, newer, err)
+			}
+		})
 	}
 }
 
