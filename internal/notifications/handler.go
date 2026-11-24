@@ -50,4 +50,18 @@ func RegisterRoutes(router fiber.Router, store *Store, broker *realtime.Broker) 
 	}
 	router.Post("/read", markRead)
 	router.Post("/:id/read", markRead)
+	router.Post("/submissions/:id/seen", func(c *fiber.Ctx) error {
+		userID, err := managementhttp.ActorID(c)
+		if err != nil {
+			return fiber.ErrUnauthorized
+		}
+		id, err := managementhttp.ParamID(c, "id")
+		if err != nil {
+			return fiber.ErrBadRequest
+		}
+		if err := store.DismissPendingSubmission(c.UserContext(), userID, id); err != nil {
+			return err
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	})
 }

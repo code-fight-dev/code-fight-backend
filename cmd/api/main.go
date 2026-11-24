@@ -17,6 +17,7 @@ import (
 	"code-fight-backend/internal/mail"
 	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/metrics"
+	"code-fight-backend/internal/notifications"
 	"code-fight-backend/internal/objectstorage"
 	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
@@ -48,10 +49,11 @@ var (
 	migrateDatabase = func(ctx context.Context, db *pgxpool.Pool) error {
 		return database.Migrate(ctx, db)
 	}
-	newResendSender = mail.NewResendSender
-	newR2Client     = objectstorage.NewR2Client
-	newHTTPApp      = httpserver.New
-	listenHTTPApp   = func(app *fiber.App, addr string) error {
+	newResendSender           = mail.NewResendSender
+	newR2Client               = objectstorage.NewR2Client
+	newHTTPApp                = httpserver.New
+	startNotificationDelivery = notifications.Start
+	listenHTTPApp             = func(app *fiber.App, addr string) error {
 		return app.Listen(addr)
 	}
 )
@@ -182,6 +184,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 
 	cleanupCtx, stopSessionCleanup := context.WithCancel(context.Background())
 	defer stopSessionCleanup()
+	startNotificationDelivery(cleanupCtx, db, realtimeBroker, logger, matches.TournamentReadyInterval)
 
 	if cfg.SessionCleanupInterval > 0 {
 		go startSessionCleanupLoop(cleanupCtx, logger, authService, cfg.SessionCleanupInterval)
@@ -202,7 +205,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		backendMetrics,
 		db,
 		administration.NewHandler(administration.NewService(db)),
-		tournament.NewHandler(tournament.NewService(db, realtimeBroker)),
+		tournament.NewHandler(tournament.NewService(db)),
 		realtimeBroker,
 	)
 

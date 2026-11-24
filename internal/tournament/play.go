@@ -342,11 +342,5 @@ where t.id=$2 and not exists (
 			return uuid.Nil, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return uuid.Nil, err
-	}
-	if s.broker != nil {
-		s.broker.PublishMany(recipients, notifications.ChangedEvent, nil)
-	}
-	return matchID, nil
+	return matchID, tx.Commit(ctx)
 }

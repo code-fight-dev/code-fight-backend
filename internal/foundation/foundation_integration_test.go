@@ -98,7 +98,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	broker := realtime.NewBroker()
-	f := &fixture{db: db, ctx: ctx, admin: administration.NewService(db), tournaments: tournament.NewService(db, broker)}
+	f := &fixture{db: db, ctx: ctx, admin: administration.NewService(db), tournaments: tournament.NewService(db)}
 	repo := auth.NewRepository(db)
 	f.auth = auth.NewService(repo, time.Hour, nil)
 	for i := 0; i < 4; i++ {

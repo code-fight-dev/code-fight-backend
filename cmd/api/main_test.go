@@ -14,6 +14,7 @@ import (
 	"code-fight-backend/internal/config"
 	"code-fight-backend/internal/mail"
 	"code-fight-backend/internal/objectstorage"
+	"code-fight-backend/internal/realtime"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -228,6 +229,7 @@ func stubRunDependencies(t *testing.T) func() {
 	origNewResendSender := newResendSender
 	origNewR2Client := newR2Client
 	origListenHTTPApp := listenHTTPApp
+	origStartNotificationDelivery := startNotificationDelivery
 
 	loadConfig = func() (config.Config, error) {
 		return testRunConfig(), nil
@@ -236,6 +238,7 @@ func stubRunDependencies(t *testing.T) func() {
 	closeDatabase = func(*pgxpool.Pool) {}
 	migrateDatabase = func(context.Context, *pgxpool.Pool) error { return nil }
 	listenHTTPApp = func(*fiber.App, string) error { return nil }
+	startNotificationDelivery = func(context.Context, *pgxpool.Pool, *realtime.Broker, *slog.Logger, string) {}
 
 	return func() {
 		loadConfig = origLoadConfig
@@ -245,6 +248,7 @@ func stubRunDependencies(t *testing.T) func() {
 		newResendSender = origNewResendSender
 		newR2Client = origNewR2Client
 		listenHTTPApp = origListenHTTPApp
+		startNotificationDelivery = origStartNotificationDelivery
 	}
 }
 

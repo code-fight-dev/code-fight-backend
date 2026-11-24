@@ -49,14 +49,14 @@ func (s *Store) List(ctx context.Context, userID uuid.UUID, before *uuid.UUID) (
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
 	var page Page
-	if err := tx.QueryRow(ctx, `select count(*) from notifications where user_id=$1 and read_at is null`, userID).
+	if err := tx.QueryRow(ctx, `select count(*) from notifications where user_id=$1 and read_at is null and deliver_at is null`, userID).
 		Scan(&page.Unread); err != nil {
 		return Page{}, err
 	}
 	rows, err := tx.Query(ctx, `select id,kind,title,message,href,deadline_at,created_at,read_at
 		from notifications
-		where user_id=$1 and ($2::uuid is null or (created_at,id) < (
-			select created_at,id from notifications where user_id=$1 and id=$2
+		where user_id=$1 and deliver_at is null and ($2::uuid is null or (created_at,id) < (
+			select created_at,id from notifications where user_id=$1 and id=$2 and deliver_at is null
 		))
 		order by created_at desc,id desc limit $3`, userID, before, pageSize+1)
 	if err != nil {
@@ -75,6 +75,12 @@ func (s *Store) List(ctx context.Context, userID uuid.UUID, before *uuid.UUID) (
 
 func (s *Store) MarkRead(ctx context.Context, userID uuid.UUID, id *uuid.UUID) error {
 	_, err := s.db.Exec(ctx, `update notifications set read_at=clock_timestamp()
-		where user_id=$1 and ($2::uuid is null or id=$2) and read_at is null`, userID, id)
+		where user_id=$1 and ($2::uuid is null or id=$2) and read_at is null and deliver_at is null`, userID, id)
+	return err
+}
+
+func (s *Store) DismissPendingSubmission(ctx context.Context, userID, submissionID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `delete from notifications where user_id=$1
+		and kind='submission.reviewed' and event_key=$2 and deliver_at is not null`, userID, submissionID.String())
 	return err
 }

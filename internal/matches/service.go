@@ -92,6 +92,10 @@ func (s *Service) SetMetrics(metrics Metrics) {
 }
 
 func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Match, error) {
+	return s.createMatch(ctx, input, "match.invited")
+}
+
+func (s *Service) createMatch(ctx context.Context, input CreateMatchInput, offerKind string) (Match, error) {
 	if input.Player1ID == uuid.Nil || input.Player2ID == uuid.Nil {
 		return Match{}, fmt.Errorf("create match: empty player id")
 	}
@@ -132,6 +136,7 @@ func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Matc
 		JudgeStatus:            JudgeStatusNotStarted,
 		IsRated:                input.IsRated,
 		RatingApplied:          false,
+		offerKind:              offerKind,
 	}
 
 	created, err := s.repo.CreateMatch(ctx, match)
@@ -251,13 +256,13 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 		return QueueResult{Status: "queued"}, nil
 	}
 
-	match, err := s.CreateMatch(ctx, CreateMatchInput{
+	match, err := s.createMatch(ctx, CreateMatchInput{
 		Player1ID:  *opponentID,
 		Player2ID:  input.UserID,
 		RatingMode: input.RatingMode,
 		TaskMode:   input.TaskMode,
 		IsRated:    input.IsRated,
-	})
+	}, "match.found")
 	if err != nil {
 		return QueueResult{}, err
 	}
@@ -393,13 +398,13 @@ func (s *Service) runQueuedMatchCheck(userID uuid.UUID) {
 		return
 	}
 
-	match, err := s.CreateMatch(ctx, CreateMatchInput{
+	match, err := s.createMatch(ctx, CreateMatchInput{
 		Player1ID:  *opponentID,
 		Player2ID:  queued.UserID,
 		RatingMode: queued.RatingMode,
 		TaskMode:   queued.TaskMode,
 		IsRated:    queued.IsRated,
-	})
+	}, "match.found")
 	if err != nil {
 		s.scheduleQueuedMatchCheck(*queued)
 		return

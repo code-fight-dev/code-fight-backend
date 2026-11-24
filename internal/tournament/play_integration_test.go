@@ -10,7 +10,6 @@ import (
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/notifications"
-	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/testsupport"
 
 	"github.com/google/uuid"
@@ -19,14 +18,11 @@ import (
 
 func TestTournamentRoundRobinLifecycle(t *testing.T) {
 	db, ctx := testsupport.RequirePostgres(t)
-	broker := realtime.NewBroker()
-	service := NewService(db, broker)
+	service := NewService(db)
 	organizer := createTournamentPlayer(t, db, ctx, access.Organizer)
 	otherOrganizer := createTournamentPlayer(t, db, ctx, access.Organizer)
 	player1 := createTournamentPlayer(t, db, ctx, access.User)
 	player2 := createTournamentPlayer(t, db, ctx, access.User)
-	player1Events, unsubscribe := broker.Subscribe(player1)
-	defer unsubscribe()
 	draft, err := service.CreateDraft(ctx, organizer, CreateInput{Slug: "cup-" + uuid.NewString(), Title: "Local cup"}, "round-robin-test")
 	if err != nil {
 		t.Fatal(err)
@@ -78,17 +74,10 @@ func TestTournamentRoundRobinLifecycle(t *testing.T) {
 	if _, err := service.ScheduleFixture(ctx, organizer, draft.ID, board.Fixtures[0].ID, "round-robin-test"); !errors.Is(err, access.ErrConflict) {
 		t.Fatalf("scheduled an already active pairing: %v", err)
 	}
-	select {
-	case event := <-player1Events:
-		if event.Type != notifications.ChangedEvent {
-			t.Fatalf("unexpected event: %s", event.Type)
-		}
-	default:
-		t.Fatal("missing notification event")
-	}
 	inbox := notifications.NewStore(db)
 	first, err := inbox.List(ctx, player1, nil)
-	if err != nil || first.Unread != 1 || len(first.Items) != 1 || first.Items[0].DeadlineAt == nil ||
+	if err != nil || first.Unread != 2 || len(first.Items) != 2 || first.Items[0].DeadlineAt == nil ||
+		first.Items[1].Kind != "tournament.started" ||
 		first.Items[0].Href != "/arena/match/"+matchID.String() {
 		t.Fatalf("first player inbox: %#v, %v", first, err)
 	}
@@ -96,11 +85,11 @@ func TestTournamentRoundRobinLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	first, err = inbox.List(ctx, player1, nil)
-	if err != nil || first.Unread != 1 {
+	if err != nil || first.Unread != 2 {
 		t.Fatalf("another player marked the notification read: %#v, %v", first, err)
 	}
 	second, err := inbox.List(ctx, player2, nil)
-	if err != nil || second.Unread != 1 || len(second.Items) != 1 || second.Items[0].ID == first.Items[0].ID ||
+	if err != nil || second.Unread != 2 || len(second.Items) != 2 || second.Items[0].ID == first.Items[0].ID ||
 		second.Items[0].DeadlineAt == nil || !second.Items[0].DeadlineAt.Equal(*first.Items[0].DeadlineAt) {
 		t.Fatalf("second player inbox: %#v, %v", second, err)
 	}
@@ -108,7 +97,7 @@ func TestTournamentRoundRobinLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	first, err = inbox.List(ctx, player1, nil)
-	if err != nil || first.Unread != 0 || len(first.Items) != 1 || first.Items[0].ReadAt == nil {
+	if err != nil || first.Unread != 1 || len(first.Items) != 2 || first.Items[0].ReadAt == nil {
 		t.Fatalf("read state was not saved: %#v, %v", first, err)
 	}
 	if err := inbox.MarkRead(ctx, player2, nil); err != nil {
@@ -140,6 +129,11 @@ func TestTournamentRoundRobinLifecycle(t *testing.T) {
 	var history int
 	if err := db.QueryRow(ctx, "select count(*) from rating_history where match_id=$1", matchID).Scan(&history); err != nil || history != 0 {
 		t.Fatalf("tournament changed global rating: %d, %v", history, err)
+	}
+	finalInbox, err := inbox.List(ctx, match.Player1ID, nil)
+	if err != nil || len(finalInbox.Items) != 4 ||
+		finalInbox.Items[0].Kind != "tournament.completed" || finalInbox.Items[1].Kind != "match.finished" {
+		t.Fatalf("winner inbox: %#v, %v", finalInbox, err)
 	}
 }
 
