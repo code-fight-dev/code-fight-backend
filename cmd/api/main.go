@@ -202,7 +202,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		backendMetrics,
 		db,
 		administration.NewHandler(administration.NewService(db)),
-		tournament.NewHandler(tournament.NewService(db)),
+		tournament.NewHandler(tournament.NewService(db, realtimeBroker)),
+		realtimeBroker,
 	)
 
 	logger.Info("starting api", "addr", cfg.ListenAddr(), "app_env", cfg.AppEnv)

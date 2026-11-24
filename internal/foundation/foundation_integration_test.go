@@ -97,7 +97,8 @@ func newFixture(t *testing.T) *fixture {
 	if err := database.Migrate(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	f := &fixture{db: db, ctx: ctx, admin: administration.NewService(db), tournaments: tournament.NewService(db)}
+	broker := realtime.NewBroker()
+	f := &fixture{db: db, ctx: ctx, admin: administration.NewService(db), tournaments: tournament.NewService(db, broker)}
 	repo := auth.NewRepository(db)
 	f.auth = auth.NewService(repo, time.Hour, nil)
 	for i := 0; i < 4; i++ {
@@ -123,8 +124,8 @@ func newFixture(t *testing.T) *fixture {
 		SubmissionRateLimit: 100, SubmissionRateWindow: time.Minute},
 		auth.NewHandler(f.auth, nil, nil, "http://frontend.test", "sid", "", "Lax", "state", time.Hour, time.Minute, false),
 		users.NewHandler(nil, nil, "sid"), tasks.NewHandler(nil, nil, ""), leaderboard.NewHandler(nil, nil, ""),
-		matches.NewHandler(nil, time.Minute), realtime.NewHandler(realtime.NewBroker()), submissions.NewHandler(nil, "token"), nil, db,
-		administration.NewHandler(f.admin), tournament.NewHandler(f.tournaments))
+		matches.NewHandler(nil, time.Minute), realtime.NewHandler(broker), submissions.NewHandler(nil, "token"), nil, db,
+		administration.NewHandler(f.admin), tournament.NewHandler(f.tournaments), broker)
 	return f
 }
 

@@ -3,10 +3,13 @@ package tournament
 import (
 	"context"
 	"errors"
+	"time"
 
 	"code-fight-backend/internal/access"
 	"code-fight-backend/internal/audit"
 	"code-fight-backend/internal/managementtx"
+	"code-fight-backend/internal/matches"
+	"code-fight-backend/internal/notifications"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -278,10 +281,12 @@ func (s *Service) ScheduleFixture(ctx context.Context, actorID, tournamentID, fi
 		return uuid.Nil, access.ErrConflict
 	}
 	var player1, player2 uuid.UUID
-	var previousStatus string
-	err = tx.QueryRow(ctx, `select f.player1_id,f.player2_id,coalesce(m.status,'unscheduled')
+	var previousStatus, player1Name, player2Name string
+	err = tx.QueryRow(ctx, `select f.player1_id,f.player2_id,coalesce(m.status,'unscheduled'),p1.username,p2.username
 		from tournament_fixtures f left join matches m on m.id=f.match_id
-		where f.tournament_id=$1 and f.id=$2`, tournamentID, fixtureID).Scan(&player1, &player2, &previousStatus)
+		join users p1 on p1.id=f.player1_id join users p2 on p2.id=f.player2_id
+		where f.tournament_id=$1 and f.id=$2`, tournamentID, fixtureID).
+		Scan(&player1, &player2, &previousStatus, &player1Name, &player2Name)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, access.ErrNotFound
 	}
@@ -301,19 +306,20 @@ func (s *Service) ScheduleFixture(ctx context.Context, actorID, tournamentID, fi
 		}
 	}
 	matchID := uuid.New()
-	result, err := tx.Exec(ctx, `
+	var deadline time.Time
+	err = tx.QueryRow(ctx, `
 insert into matches (id,task_id,task_difficulty_snapshot,player1_id,player2_id,is_rated)
 select $1,t.task_id,task.difficulty,$3,$4,false
 from tournaments t join tasks task on task.id=t.task_id and task.is_active
 where t.id=$2 and not exists (
     select 1 from matches where status in ('pending','running')
       and (player1_id in ($3,$4) or player2_id in ($3,$4))
-)`, matchID, tournamentID, player1, player2)
+) returning created_at + interval '`+matches.TournamentReadyInterval+`'`, matchID, tournamentID, player1, player2).Scan(&deadline)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, access.ErrConflict
+	}
 	if err != nil {
 		return uuid.Nil, err
-	}
-	if result.RowsAffected() != 1 {
-		return uuid.Nil, access.ErrConflict
 	}
 	if _, err := tx.Exec(ctx, "update tournament_fixtures set match_id=$2 where id=$1", fixtureID, matchID); err != nil {
 		return uuid.Nil, err
@@ -325,5 +331,22 @@ where t.id=$2 and not exists (
 	}); err != nil {
 		return uuid.Nil, err
 	}
-	return matchID, tx.Commit(ctx)
+	recipients := []uuid.UUID{player1, player2}
+	opponents := []string{player2Name, player1Name}
+	for index, recipient := range recipients {
+		if err := notifications.Insert(ctx, tx, recipient, notifications.Item{
+			Kind: "tournament.match_scheduled", Title: "Tournament match scheduled",
+			Message: draft.Title + " · Opponent: " + opponents[index],
+			Href:    "/arena/match/" + matchID.String(), DeadlineAt: &deadline,
+		}); err != nil {
+			return uuid.Nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, err
+	}
+	if s.broker != nil {
+		s.broker.PublishMany(recipients, notifications.ChangedEvent, nil)
+	}
+	return matchID, nil
 }
