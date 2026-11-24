@@ -131,7 +131,7 @@ func New(
 	matchesHandler.RegisterRoutes(matchesGroup)
 
 	eventsGroup := protectedGroup("/api/events", authHandler.RequireAuth)
-	realtimeHandler.RegisterRoutes(eventsGroup)
+	realtimeHandler.RegisterRoutes(eventsGroup, authHandler.StreamSessionCheck)
 	notifications.RegisterRoutes(protectedGroup("/api/notifications", authHandler.RequireAuth), notifications.NewStore(db), realtimeBroker)
 
 	adminGroup := protectedGroup("/api/admin", authHandler.RequireAuth, auth.RequireRoles(access.Admin))

@@ -3,9 +3,11 @@ package realtime
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -14,7 +16,9 @@ import (
 
 func TestHandlerRegisterRoutesAndStreamRequiresAuth(t *testing.T) {
 	app := fiber.New()
-	NewHandler(NewBroker()).RegisterRoutes(app)
+	NewHandler(NewBroker()).RegisterRoutes(app, func(*fiber.Ctx) func(context.Context, uuid.UUID) bool {
+		return nil
+	})
 
 	req, err := http.NewRequest(http.MethodGet, "/", nil)
 	if err != nil {
@@ -95,14 +99,29 @@ func TestHandlerStreamSetsSSEHeaders(t *testing.T) {
 	ctx.Locals("user_id", uuid.New())
 	handler := NewHandler(NewBroker())
 
-	if err := handler.Stream(ctx); err != nil {
+	if err := handler.Stream(ctx, func(context.Context, uuid.UUID) bool { return true }); err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
 	if got := string(ctx.Response().Header.ContentType()); got != "text/event-stream" {
 		t.Fatalf("content-type = %q, want text/event-stream", got)
 	}
-	if got := string(ctx.Response().Header.Peek(fiber.HeaderCacheControl)); got != "no-cache, no-transform" {
+	if got := string(ctx.Response().Header.Peek(fiber.HeaderCacheControl)); got != "private, no-store, no-transform" {
 		t.Fatalf("cache-control = %q", got)
+	}
+}
+
+func TestStreamStopsWhenSessionIsRevoked(t *testing.T) {
+	var buf bytes.Buffer
+	ticks := make(chan time.Time, 2)
+	ticks <- time.Now()
+	ticks <- time.Now()
+	checks := 0
+	writeStream(bufio.NewWriter(&buf), make(chan Event), ticks, func() bool {
+		checks++
+		return checks == 1
+	})
+	if checks != 2 || strings.Count(buf.String(), ": heartbeat") != 1 {
+		t.Fatalf("checks=%d, stream=%q", checks, buf.String())
 	}
 }
 

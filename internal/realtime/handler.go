@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,12 +21,13 @@ func NewHandler(broker *Broker) *Handler {
 	return &Handler{broker: broker}
 }
 
-func (h *Handler) RegisterRoutes(router fiber.Router) {
-	router.Get("", h.Stream)
-	router.Get("/", h.Stream)
+func (h *Handler) RegisterRoutes(router fiber.Router, sessionCheck func(*fiber.Ctx) func(context.Context, uuid.UUID) bool) {
+	stream := func(c *fiber.Ctx) error { return h.Stream(c, sessionCheck(c)) }
+	router.Get("", stream)
+	router.Get("/", stream)
 }
 
-func (h *Handler) Stream(c *fiber.Ctx) error {
+func (h *Handler) Stream(c *fiber.Ctx, checkSession func(context.Context, uuid.UUID) bool) error {
 	userID, err := userIDFromCtx(c)
 	if err != nil {
 		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
@@ -34,50 +36,55 @@ func (h *Handler) Stream(c *fiber.Ctx) error {
 	events, unsubscribe := h.broker.Subscribe(userID)
 
 	c.Set(fiber.HeaderContentType, "text/event-stream")
-	c.Set(fiber.HeaderCacheControl, "no-cache, no-transform")
+	c.Set(fiber.HeaderCacheControl, "private, no-store, no-transform")
 	c.Set(fiber.HeaderConnection, "keep-alive")
 	c.Set("X-Accel-Buffering", "no")
 
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
 		defer unsubscribe()
-
-		writeEvent(w, Event{
-			ID:   uuid.NewString(),
-			Type: "connected",
-			Data: json.RawMessage(`{"ok":true}`),
-		})
-
 		heartbeat := time.NewTicker(20 * time.Second)
 		defer heartbeat.Stop()
-
-		for {
-			select {
-			case event, ok := <-events:
-				if !ok {
-					return
-				}
-				writeEvent(w, event)
-			case <-heartbeat.C:
-				if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
-					return
-				}
-				if err := w.Flush(); err != nil {
-					return
-				}
-			}
-		}
+		writeStream(w, events, heartbeat.C, func() bool {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			return checkSession(ctx, userID)
+		})
 	}))
 
 	return nil
 }
 
-func writeEvent(w *bufio.Writer, event Event) {
+func writeStream(w *bufio.Writer, events <-chan Event, ticks <-chan time.Time, validSession func() bool) {
+	if writeEvent(w, Event{ID: uuid.NewString(), Type: "connected", Data: json.RawMessage(`{"ok":true}`)}) != nil {
+		return
+	}
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok || writeEvent(w, event) != nil {
+				return
+			}
+		case <-ticks:
+			if !validSession() {
+				return
+			}
+			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+				return
+			}
+			if w.Flush() != nil {
+				return
+			}
+		}
+	}
+}
+
+func writeEvent(w *bufio.Writer, event Event) error {
 	if event.ID != "" {
 		fmt.Fprintf(w, "id: %s\n", event.ID)
 	}
 	fmt.Fprintf(w, "event: %s\n", event.Type)
 	fmt.Fprintf(w, "data: %s\n\n", string(event.Data))
-	_ = w.Flush()
+	return w.Flush()
 }
 
 func userIDFromCtx(c *fiber.Ctx) (uuid.UUID, error) {
