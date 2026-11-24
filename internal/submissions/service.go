@@ -344,6 +344,13 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 	}
 
 	if staleJudgeCallback(sub.Status, sub.StartedAt, payload.StartedAt) {
+		// A terminal write can succeed before match processing fails. Replaying
+		// that result can apply the match outcome without writing the verdict again.
+		if payload.JudgeStatus != JudgeStatusRunning &&
+			(sub.Status == StatusFinished || sub.Status == StatusFailed) &&
+			sub.StartedAt != nil && payload.StartedAt != nil && sub.StartedAt.Equal(*payload.StartedAt) {
+			return s.applySubmissionMatchResult(ctx, sub)
+		}
 		return nil
 	}
 
@@ -417,15 +424,19 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 	}
 	s.recordSubmissionFinished(submissionScope(sub), sub.Language, finalStatus, nullableVerdict(payload.Verdict))
 
-	if sub.MatchID != nil && s.matchApplier != nil {
-		submissionID, err := uuid.Parse(sub.ID)
-		if err != nil {
-			return fmt.Errorf("parse submission id: %w", err)
-		}
+	return s.applySubmissionMatchResult(ctx, sub)
+}
 
-		if err := s.matchApplier.ApplySubmissionResult(ctx, submissionID); err != nil {
-			return fmt.Errorf("apply submission result to match: %w", err)
-		}
+func (s *Service) applySubmissionMatchResult(ctx context.Context, sub *Submission) error {
+	if sub.MatchID == nil || s.matchApplier == nil {
+		return nil
+	}
+	submissionID, err := uuid.Parse(sub.ID)
+	if err != nil {
+		return fmt.Errorf("parse submission id: %w", err)
+	}
+	if err := s.matchApplier.ApplySubmissionResult(ctx, submissionID); err != nil {
+		return fmt.Errorf("apply submission result to match: %w", err)
 	}
 
 	return nil
