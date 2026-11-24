@@ -313,7 +313,9 @@ const cancelExpiredPendingMatchesQuery = `
 		select id
 		from matches
 		where status = 'pending'
-		  and created_at <= now() - ($1::text)::interval
+		  and created_at <= now() - case when exists (
+		      select 1 from tournament_fixtures tf where tf.match_id = matches.id
+		  ) then interval '15 minutes' else ($1::text)::interval end
 		order by created_at asc
 		limit $2
 		for update skip locked

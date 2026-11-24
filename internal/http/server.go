@@ -119,6 +119,7 @@ func New(
 	tasksHandler.RegisterRoutes(tasksGroup)
 	leaderboardHandler.RegisterRoutes(tasksGroup)
 	matchesHandler.RegisterPublicRoutes(tasksGroup)
+	tournamentHandler.RegisterPublicRoutes(tasksGroup, authHandler.RequireAuth)
 
 	matchesGroup := protectedGroup(
 		"/api/matches",
