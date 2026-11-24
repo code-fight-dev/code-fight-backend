@@ -24,6 +24,7 @@ const (
 )
 
 type SubmitRequest struct {
+	DurableDispatch bool   `json:"durable_dispatch,omitempty"`
 	SubmissionID    string `json:"submission_id"`
 	TaskID          string `json:"task_id"`
 	Language        string `json:"language"`

@@ -85,6 +85,10 @@ func NewPGRepository(db *pgxpool.Pool) *PGRepository {
 }
 
 func (r *PGRepository) Create(ctx context.Context, s *Submission) error {
+	return r.createSubmission(ctx, s, nil)
+}
+
+func (r *PGRepository) createSubmission(ctx context.Context, s *Submission, dispatch []byte) error {
 	const q = `
 insert into submissions (
     id, match_id, task_id, user_id, language, language_version, source_code,
@@ -100,7 +104,7 @@ insert into submissions (
     $23, $24, $25, $26
 )`
 
-	return r.createWithJudgeCapacity(ctx, s.UserID, s.Status, q,
+	return r.createWithJudgeCapacity(ctx, s.UserID, s.Status, dispatch, false, q,
 		s.ID, s.MatchID, s.TaskID, s.UserID, s.Language, s.LanguageVersion, s.SourceCode,
 		s.Status, s.Verdict, s.JudgeSubmissionID, s.JudgeStatus, s.ErrorMessage,
 		s.PassedTests, s.TotalTests, s.CompileTimeMs, s.RunTimeMs, s.PeakMemoryKb,
@@ -110,6 +114,10 @@ insert into submissions (
 }
 
 func (r *PGRepository) CreateCodeRun(ctx context.Context, run *CodeRun) error {
+	return r.createCodeRun(ctx, run, nil)
+}
+
+func (r *PGRepository) createCodeRun(ctx context.Context, run *CodeRun, dispatch []byte) error {
 	const q = `
 insert into code_runs (
     id, task_id, user_id, language, language_version, source_code,
@@ -125,7 +133,7 @@ insert into code_runs (
     $22, $23, $24, $25
 )`
 
-	return r.createWithJudgeCapacity(ctx, run.UserID, run.Status, q,
+	return r.createWithJudgeCapacity(ctx, run.UserID, run.Status, dispatch, true, q,
 		run.ID, run.TaskID, run.UserID, run.Language, run.LanguageVersion, run.SourceCode,
 		run.Status, run.Verdict, run.JudgeSubmissionID, run.JudgeStatus, run.ErrorMessage,
 		run.PassedTests, run.TotalTests, run.CompileTimeMs, run.RunTimeMs, run.PeakMemoryKb,
@@ -134,7 +142,7 @@ insert into code_runs (
 	)
 }
 
-func (r *PGRepository) createWithJudgeCapacity(ctx context.Context, userID, status, query string, args ...any) error {
+func (r *PGRepository) createWithJudgeCapacity(ctx context.Context, userID, status string, dispatch []byte, codeRun bool, query string, args ...any) error {
 	if status != StatusQueued {
 		_, err := r.db.Exec(ctx, query, args...)
 		return err
@@ -153,17 +161,17 @@ func (r *PGRepository) createWithJudgeCapacity(ctx context.Context, userID, stat
 		return err
 	}
 
-	// A queued record can survive a failed dispatch. Give in-flight dispatches a
-	// reservation, but do not let undelivered records use capacity indefinitely.
+	// Legacy unsent records have no worker to pick them up. Durable records
+	// retain their reservation until they reach a terminal state.
 	const activeJobs = `
 select count(*) from (
     select 1 from submissions
     where user_id = $1 and status in ('queued', 'sent_to_judge', 'running')
-      and (status <> 'queued' or updated_at >= now() - interval '2 minutes')
+      and (status <> 'queued' or judge_submission_id is not null or updated_at >= now() - interval '2 minutes')
     union all
     select 1 from code_runs
     where user_id = $1 and status in ('queued', 'sent_to_judge', 'running')
-      and (status <> 'queued' or updated_at >= now() - interval '2 minutes')
+      and (status <> 'queued' or judge_submission_id is not null or updated_at >= now() - interval '2 minutes')
     limit $2
 ) active`
 	var count int
@@ -175,6 +183,12 @@ select count(*) from (
 	}
 	if _, err := tx.Exec(ctx, query, args...); err != nil {
 		return err
+	}
+	if dispatch != nil {
+		if _, err := tx.Exec(ctx, `insert into judge_dispatch (id, submission_id, code_run_id, payload)
+			values ($1::uuid, case when not $2::boolean then $1 end, case when $2 then $1 end, $3::jsonb)`, args[0], codeRun, dispatch); err != nil {
+			return fmt.Errorf("queue judge dispatch: %w", err)
+		}
 	}
 	return tx.Commit(ctx)
 }

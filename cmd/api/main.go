@@ -53,7 +53,10 @@ var (
 	newR2Client               = objectstorage.NewR2Client
 	newHTTPApp                = httpserver.New
 	startNotificationDelivery = notifications.Start
-	listenHTTPApp             = func(app *fiber.App, addr string) error {
+	startJudgeDispatch        = func(ctx context.Context, service *submissions.Service, repo *submissions.PGRepository, timeout time.Duration, logger *slog.Logger) {
+		go service.RunDispatch(ctx, repo, timeout, logger)
+	}
+	listenHTTPApp = func(app *fiber.App, addr string) error {
 		return app.Listen(addr)
 	}
 )
@@ -184,6 +187,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 
 	cleanupCtx, stopSessionCleanup := context.WithCancel(context.Background())
 	defer stopSessionCleanup()
+	startJudgeDispatch(cleanupCtx, submissionsService, submissionsRepo, cfg.JudgeTimeout, logger)
 	startNotificationDelivery(cleanupCtx, db, realtimeBroker, logger, matches.TournamentReadyInterval)
 
 	if cfg.SessionCleanupInterval > 0 {
