@@ -12,7 +12,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const timeLayout = time.RFC3339
+const (
+	timeLayout                = time.RFC3339
+	maxActiveJudgeJobsPerUser = 4
+)
 
 type CompleteInput struct {
 	Status          string
@@ -97,14 +100,13 @@ insert into submissions (
     $23, $24, $25, $26
 )`
 
-	_, err := r.db.Exec(ctx, q,
+	return r.createWithJudgeCapacity(ctx, s.UserID, s.Status, q,
 		s.ID, s.MatchID, s.TaskID, s.UserID, s.Language, s.LanguageVersion, s.SourceCode,
 		s.Status, s.Verdict, s.JudgeSubmissionID, s.JudgeStatus, s.ErrorMessage,
 		s.PassedTests, s.TotalTests, s.CompileTimeMs, s.RunTimeMs, s.PeakMemoryKb,
 		s.Score, s.ExitCode, s.CompileLog, s.StdoutTruncated, s.StderrTruncated,
 		s.CreatedAt, s.StartedAt, s.FinishedAt, s.UpdatedAt,
 	)
-	return err
 }
 
 func (r *PGRepository) CreateCodeRun(ctx context.Context, run *CodeRun) error {
@@ -123,14 +125,58 @@ insert into code_runs (
     $22, $23, $24, $25
 )`
 
-	_, err := r.db.Exec(ctx, q,
+	return r.createWithJudgeCapacity(ctx, run.UserID, run.Status, q,
 		run.ID, run.TaskID, run.UserID, run.Language, run.LanguageVersion, run.SourceCode,
 		run.Status, run.Verdict, run.JudgeSubmissionID, run.JudgeStatus, run.ErrorMessage,
 		run.PassedTests, run.TotalTests, run.CompileTimeMs, run.RunTimeMs, run.PeakMemoryKb,
 		run.Score, run.ExitCode, run.CompileLog, run.StdoutTruncated, run.StderrTruncated,
 		run.CreatedAt, run.StartedAt, run.FinishedAt, run.UpdatedAt,
 	)
-	return err
+}
+
+func (r *PGRepository) createWithJudgeCapacity(ctx context.Context, userID, status, query string, args ...any) error {
+	if status != StatusQueued {
+		_, err := r.db.Exec(ctx, query, args...)
+		return err
+	}
+
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
+
+	// Every queued run or submission by this user shares the same admission lock.
+	if _, err := tx.Exec(ctx,
+		"select pg_advisory_xact_lock(hashtextextended('judge-admission:' || $1::text, 0))", userID,
+	); err != nil {
+		return err
+	}
+
+	// A queued record can survive a failed dispatch. Give in-flight dispatches a
+	// reservation, but do not let undelivered records use capacity indefinitely.
+	const activeJobs = `
+select count(*) from (
+    select 1 from submissions
+    where user_id = $1 and status in ('queued', 'sent_to_judge', 'running')
+      and (status <> 'queued' or updated_at >= now() - interval '2 minutes')
+    union all
+    select 1 from code_runs
+    where user_id = $1 and status in ('queued', 'sent_to_judge', 'running')
+      and (status <> 'queued' or updated_at >= now() - interval '2 minutes')
+    limit $2
+) active`
+	var count int
+	if err := tx.QueryRow(ctx, activeJobs, userID, maxActiveJudgeJobsPerUser).Scan(&count); err != nil {
+		return err
+	}
+	if count >= maxActiveJudgeJobsPerUser {
+		return ErrJudgeActiveLimit
+	}
+	if _, err := tx.Exec(ctx, query, args...); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *PGRepository) GetByID(ctx context.Context, id string) (*Submission, []SubmissionTestResult, error) {

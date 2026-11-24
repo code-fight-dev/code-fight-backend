@@ -13,6 +13,52 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func TestPGRepositoryConcurrentJudgeAdmission(t *testing.T) {
+	db, ctx := testsupport.RequirePostgres(t)
+	repo := NewPGRepository(db)
+	userID := createSubmissionTestUser(t, db, ctx)
+	taskID, _, _ := createSubmissionTestTask(t, db, ctx)
+	now := time.Now().UTC()
+
+	const requests = 8
+	start := make(chan struct{})
+	results := make(chan error, requests)
+	for i := range requests {
+		go func() {
+			<-start
+			if i%2 == 0 {
+				results <- repo.Create(ctx, &Submission{
+					ID: uuid.NewString(), TaskID: taskID.String(), UserID: userID.String(),
+					Language: "go", LanguageVersion: "1.24", SourceCode: "package main",
+					Status: StatusQueued, CreatedAt: now, UpdatedAt: now,
+				})
+				return
+			}
+			results <- repo.CreateCodeRun(ctx, &CodeRun{
+				ID: uuid.NewString(), TaskID: taskID.String(), UserID: userID.String(),
+				Language: "go", LanguageVersion: "1.24", SourceCode: "package main",
+				Status: StatusQueued, CreatedAt: now, UpdatedAt: now,
+			})
+		}()
+	}
+	close(start)
+
+	admitted, rejected := 0, 0
+	for range requests {
+		switch err := <-results; {
+		case err == nil:
+			admitted++
+		case errors.Is(err, ErrJudgeActiveLimit):
+			rejected++
+		default:
+			t.Errorf("admit judge job: %v", err)
+		}
+	}
+	if admitted != maxActiveJudgeJobsPerUser || rejected != requests-maxActiveJudgeJobsPerUser {
+		t.Fatalf("admitted %d, rejected %d", admitted, rejected)
+	}
+}
+
 func TestPGRepositoryIntegrationSubmissionAndCodeRunLifecycle(t *testing.T) {
 	db, ctx := testsupport.RequirePostgres(t)
 	repo := NewPGRepository(db)
