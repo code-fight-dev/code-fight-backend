@@ -18,14 +18,16 @@ import (
 const maxParticipants = 16
 
 type Summary struct {
-	ID            uuid.UUID `json:"id"`
-	Slug          string    `json:"slug"`
-	Title         string    `json:"title"`
-	Description   string    `json:"description"`
-	Status        string    `json:"status"`
-	TaskID        uuid.UUID `json:"taskId"`
-	OwnerID       uuid.UUID `json:"ownerId"`
-	ConfigVersion int64     `json:"configVersion"`
+	Schedule
+	ID            uuid.UUID  `json:"id"`
+	Slug          string     `json:"slug"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description"`
+	Status        string     `json:"status"`
+	TaskID        uuid.UUID  `json:"taskId"`
+	OwnerID       uuid.UUID  `json:"ownerId"`
+	ConfigVersion int64      `json:"configVersion"`
+	CompletedAt   *time.Time `json:"completedAt"`
 }
 
 type Standing struct {
@@ -38,12 +40,13 @@ type Standing struct {
 }
 
 type Fixture struct {
-	ID       uuid.UUID  `json:"id"`
-	Player1  string     `json:"player1"`
-	Player2  string     `json:"player2"`
-	MatchID  *uuid.UUID `json:"matchId"`
-	Status   string     `json:"status"`
-	WinnerID *uuid.UUID `json:"winnerId"`
+	ID              uuid.UUID  `json:"id"`
+	Player1         string     `json:"player1"`
+	Player2         string     `json:"player2"`
+	MatchID         *uuid.UUID `json:"matchId"`
+	Status          string     `json:"status"`
+	WinnerID        *uuid.UUID `json:"winnerId"`
+	ReadyDeadlineAt *time.Time `json:"readyDeadlineAt"`
 }
 
 type Board struct {
@@ -53,20 +56,25 @@ type Board struct {
 }
 
 type TransitionInput struct {
+	Schedule
 	Status                string `json:"status"`
 	TaskSlug              string `json:"taskSlug"`
 	ExpectedConfigVersion int64  `json:"expectedConfigVersion"`
 }
 
-const summaryColumns = `id, slug, title, description, status, task_id, owner_id, config_version`
+const summaryColumns = `id, slug, title, description, status, task_id, owner_id, config_version,
+	registration_closes_at, starts_at, ends_at, completed_at`
 
 func scanSummary(row interface{ Scan(...any) error }) (Summary, error) {
 	var summary Summary
 	err := row.Scan(&summary.ID, &summary.Slug, &summary.Title, &summary.Description,
-		&summary.Status, &summary.TaskID, &summary.OwnerID, &summary.ConfigVersion)
+		&summary.Status, &summary.TaskID, &summary.OwnerID, &summary.ConfigVersion,
+		&summary.RegistrationClosesAt, &summary.StartsAt, &summary.EndsAt, &summary.CompletedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = access.ErrNotFound
 	}
+	summary.Schedule = summary.Schedule.utc()
+	summary.CompletedAt = utcTime(summary.CompletedAt)
 	return summary, err
 }
 
@@ -111,9 +119,12 @@ func (s *Service) Board(ctx context.Context, id uuid.UUID) (Board, error) {
 		return Board{}, err
 	}
 	fixtures, err := tx.Query(ctx, `
-select f.id as id, p1.username as player1, p2.username as player2,
-       f.match_id as match_id, coalesce(m.status, 'unscheduled') as status, m.winner_id as winner_id
+select f.id as id, p1.username as player1, p2.username as player2, f.match_id as match_id,
+       coalesce(m.status, case when t.status='completed' then 'cancelled' else 'unscheduled' end) as status,
+       m.winner_id as winner_id,
+       case when m.id is not null then least(m.created_at+interval '`+matches.TournamentReadyInterval+`', t.ends_at) end as ready_deadline_at
 from tournament_fixtures f
+join tournaments t on t.id=f.tournament_id
 join users p1 on p1.id=f.player1_id
 join users p2 on p2.id=f.player2_id
 left join matches m on m.id=f.match_id
@@ -125,6 +136,9 @@ order by p1.username, p2.username, f.id`, id)
 	fixtureItems, err := pgx.CollectRows(fixtures, pgx.RowToStructByName[Fixture])
 	if err != nil {
 		return Board{}, err
+	}
+	for index := range fixtureItems {
+		fixtureItems[index].ReadyDeadlineAt = utcTime(fixtureItems[index].ReadyDeadlineAt)
 	}
 	standings, err := tx.Query(ctx, `
 select p.user_id, u.username, count(m.id) as played,
@@ -157,7 +171,9 @@ func (s *Service) Join(ctx context.Context, userID, id uuid.UUID) error {
 	}
 	defer cleanup()
 	var status string
-	err = tx.QueryRow(ctx, `select status from tournaments where id=$1 and status <> 'draft' for update`, id).Scan(&status)
+	var closesAt *time.Time
+	err = tx.QueryRow(ctx, `select status, registration_closes_at from tournaments where id=$1 and status <> 'draft' for update`, id).
+		Scan(&status, &closesAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return access.ErrNotFound
 	}
@@ -177,8 +193,13 @@ func (s *Service) Join(ctx context.Context, userID, id uuid.UUID) error {
 	if status != "published" || count >= maxParticipants {
 		return access.ErrConflict
 	}
-	if _, err := tx.Exec(ctx, "insert into tournament_participants values ($1,$2)", id, userID); err != nil {
+	result, err := tx.Exec(ctx, `insert into tournament_participants (tournament_id,user_id)
+		select $1,$2 where $3::timestamptz is null or clock_timestamp() < $3`, id, userID, closesAt)
+	if err != nil {
 		return err
+	}
+	if result.RowsAffected() == 0 {
+		return access.ErrConflict
 	}
 	return tx.Commit(ctx)
 }
@@ -208,14 +229,24 @@ func (s *Service) Transition(ctx context.Context, actorID, id uuid.UUID, input T
 	if draft.ConfigVersion != input.ExpectedConfigVersion {
 		return access.ErrConflict
 	}
+	if input.Status != "published" && !input.Schedule.empty() {
+		return access.ErrInvalidInput
+	}
 	switch input.Status {
 	case "published":
 		if draft.Status != "draft" {
 			return access.ErrConflict
 		}
-		result, err := tx.Exec(ctx, `update tournaments set task_id=tasks.id, status='published'
+		schedule := input.Schedule.utc()
+		if err := schedule.validate(); err != nil {
+			return err
+		}
+		result, err := tx.Exec(ctx, `update tournaments set task_id=tasks.id, status='published',
+			registration_closes_at=$3, starts_at=$4, ends_at=$5
 			from tasks where tournaments.id=$1 and tasks.slug=$2 and tasks.is_active
-			and exists (select 1 from task_languages where task_id=tasks.id and is_enabled)`, id, input.TaskSlug)
+			and ($3::timestamptz is null or $3 > clock_timestamp())
+			and exists (select 1 from task_languages where task_id=tasks.id and is_enabled)`,
+			id, input.TaskSlug, schedule.RegistrationClosesAt, schedule.StartsAt, schedule.EndsAt)
 		if err != nil {
 			return err
 		}
@@ -223,17 +254,14 @@ func (s *Service) Transition(ctx context.Context, actorID, id uuid.UUID, input T
 			return access.ErrInvalidInput
 		}
 	case "running":
-		if draft.Status != "published" {
+		if draft.Status != "published" || draft.StartsAt != nil {
 			return access.ErrConflict
 		}
-		result, err := tx.Exec(ctx, `insert into tournament_fixtures (tournament_id,player1_id,player2_id)
-			select $1,p1.user_id,p2.user_id from tournament_participants p1
-			join tournament_participants p2 on p2.tournament_id=p1.tournament_id and p1.user_id<p2.user_id
-			where p1.tournament_id=$1`, id)
+		created, err := createFixtures(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		if result.RowsAffected() == 0 {
+		if !created {
 			return access.ErrConflict
 		}
 	case "completed":
@@ -253,8 +281,7 @@ func (s *Service) Transition(ctx context.Context, actorID, id uuid.UUID, input T
 	default:
 		return access.ErrInvalidInput
 	}
-	if _, err := tx.Exec(ctx, `update tournaments set status=$2, config_version=config_version+1,
-		updated_at=clock_timestamp() where id=$1`, id, input.Status); err != nil {
+	if err := updateStatus(ctx, tx, id, input.Status); err != nil {
 		return err
 	}
 	if err := audit.Append(ctx, tx, audit.Event{
@@ -314,7 +341,9 @@ from tournaments t join tasks task on task.id=t.task_id and task.is_active
 where t.id=$2 and not exists (
     select 1 from matches where status in ('pending','running')
       and (player1_id in ($3,$4) or player2_id in ($3,$4))
-) returning created_at + interval '`+matches.TournamentReadyInterval+`'`, matchID, tournamentID, player1, player2).Scan(&deadline)
+) and (t.ends_at is null or t.ends_at > clock_timestamp())
+returning least(created_at + interval '`+matches.TournamentReadyInterval+`', $5::timestamptz)`,
+		matchID, tournamentID, player1, player2, draft.EndsAt).Scan(&deadline)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, access.ErrConflict
 	}

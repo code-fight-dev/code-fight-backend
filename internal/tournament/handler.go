@@ -18,6 +18,7 @@ type draftService interface {
 	ListDrafts(context.Context, uuid.UUID, int, string) (Page, error)
 	UpdateDraft(context.Context, uuid.UUID, uuid.UUID, UpdateInput, string) (Draft, error)
 	ListPublished(context.Context) ([]Summary, error)
+	History(context.Context, uuid.UUID, int, string) (HistoryPage, error)
 	Board(context.Context, uuid.UUID) (Board, error)
 	Join(context.Context, uuid.UUID, uuid.UUID) error
 	Transition(context.Context, uuid.UUID, uuid.UUID, TransitionInput, string) error
@@ -38,8 +39,26 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 
 func (h *Handler) RegisterPublicRoutes(router fiber.Router, requireAuth fiber.Handler) {
 	router.Get("/tournaments", h.published)
+	router.Get("/tournaments/history", requireAuth, h.history)
 	router.Get("/tournaments/:id", h.board)
 	router.Post("/tournaments/:id/join", requireAuth, h.join)
+}
+
+func (h *Handler) history(c *fiber.Ctx) error {
+	c.Set("Cache-Control", "private, no-store")
+	actor, err := managementhttp.ActorID(c)
+	if err != nil {
+		return respondError(c, err)
+	}
+	limit, err := strconv.Atoi(c.Query("limit", "50"))
+	if err != nil {
+		return respondError(c, access.ErrInvalidInput)
+	}
+	page, err := h.service.History(c.UserContext(), actor, limit, c.Query("cursor"))
+	if err != nil {
+		return respondError(c, err)
+	}
+	return c.JSON(page)
 }
 
 func (h *Handler) published(c *fiber.Ctx) error {

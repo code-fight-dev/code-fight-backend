@@ -156,6 +156,9 @@ func (r *Repository) StartMatch(ctx context.Context, matchID uuid.UUID, actorID 
 	player2Ready := match.Player2Ready || actorID == match.Player2ID
 	if !player1Ready || !player2Ready {
 		updated, err := scanMatch(tx.QueryRow(ctx, acceptMatchQuery, matchID, player1Ready, player2Ready))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Match{}, ErrMatchCancelled
+		}
 		if err != nil {
 			return Match{}, fmt.Errorf("accept match: %w", err)
 		}
@@ -179,6 +182,9 @@ func (r *Repository) StartMatch(ctx context.Context, matchID uuid.UUID, actorID 
 		JudgeStatusRunning,
 		duration.String(),
 	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Match{}, ErrMatchCancelled
+	}
 	if err != nil {
 		return Match{}, fmt.Errorf("start match: %w", err)
 	}
@@ -661,7 +667,7 @@ func (r *Repository) FinishMatch(ctx context.Context, input FinishMatchInput) er
 		judgeStatus = *input.JudgeStatus
 	}
 
-	_, err = tx.Exec(
+	applied, err := tx.Exec(
 		ctx,
 		finishMatchQuery,
 		input.MatchID,
@@ -674,6 +680,9 @@ func (r *Repository) FinishMatch(ctx context.Context, input FinishMatchInput) er
 	)
 	if err != nil {
 		return fmt.Errorf("update match result: %w", err)
+	}
+	if applied.RowsAffected() == 0 {
+		return ErrMatchCancelled
 	}
 
 	if !match.IsRated {

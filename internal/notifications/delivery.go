@@ -84,14 +84,26 @@ func deliverScheduled(ctx context.Context, db *pgxpool.Pool, tournamentReadyInte
 insert into notifications (user_id,kind,title,message,href,deadline_at,event_key)
 select p.user_id,'tournament.ready_reminder','Confirm match readiness',
        t.title || ' · Your readiness deadline is approaching.',
-       '/arena/match/' || m.id,m.created_at+$1::interval,m.id::text
+       '/arena/match/' || m.id,deadline.at,m.id::text
 from matches m
 join tournament_fixtures f on f.match_id=m.id
 join tournaments t on t.id=f.tournament_id
+cross join lateral (select least(m.created_at+$1::interval, t.ends_at) as at) deadline
 cross join lateral (values (m.player1_id,m.player1_ready),(m.player2_id,m.player2_ready)) p(user_id,ready)
 where m.status='pending' and not p.ready
-  and m.created_at+$1::interval > now()
-  and m.created_at+$1::interval <= now()+interval '3 minutes'
+  and deadline.at > now()
+  and deadline.at <= now()+interval '3 minutes'
 on conflict (user_id,kind,event_key) do nothing`, tournamentReadyInterval)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(ctx, `
+insert into notifications (user_id,kind,title,message,href,deadline_at,event_key)
+select p.user_id,'tournament.start_reminder','Tournament starts soon',
+       t.title || ' · The scheduled start is approaching.', '/tournaments/' || t.id,t.starts_at,t.id::text
+from tournaments t join tournament_participants p on p.tournament_id=t.id
+where t.status='published' and t.registration_closes_at <= now()
+  and t.starts_at > now() and t.starts_at <= now()+interval '3 minutes'
+on conflict (user_id,kind,event_key) do nothing`)
 	return err
 }
