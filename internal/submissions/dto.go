@@ -42,6 +42,7 @@ type CodeRunTestResultDTO struct {
 type SubmissionResponse struct {
 	ID                string                    `json:"id"`
 	MatchID           *string                   `json:"match_id,omitempty"`
+	TournamentID      *string                   `json:"tournament_id,omitempty"`
 	TaskID            string                    `json:"task_id"`
 	UserID            string                    `json:"user_id"`
 	Language          string                    `json:"language"`
@@ -100,6 +101,7 @@ func ToSubmissionResponse(s *Submission, tests []SubmissionTestResult) Submissio
 	resp := SubmissionResponse{
 		ID:                s.ID,
 		MatchID:           s.MatchID,
+		TournamentID:      s.TournamentID,
 		TaskID:            s.TaskID,
 		UserID:            s.UserID,
 		Language:          s.Language,

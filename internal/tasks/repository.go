@@ -253,7 +253,8 @@ select
 	started_at,
 	finished_at,
 	updated_at,
-	coalesce(test_results.items, '[]'::jsonb)::text
+	coalesce(test_results.items, '[]'::jsonb)::text,
+	tournament_id::text
 from submissions
 left join lateral (
 	select jsonb_agg(
@@ -319,6 +320,7 @@ limit 100
 			&finishedAt,
 			&updatedAt,
 			&testResultsText,
+			&item.TournamentID,
 		); err != nil {
 			return nil, err
 		}

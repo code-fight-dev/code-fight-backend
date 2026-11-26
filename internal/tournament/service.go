@@ -35,6 +35,7 @@ type Draft struct {
 	OwnerID       uuid.UUID  `json:"ownerId"`
 	CreatedBy     uuid.UUID  `json:"createdBy"`
 	Status        string     `json:"status"`
+	Format        string     `json:"format"`
 	ConfigVersion int64      `json:"configVersion"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	UpdatedAt     time.Time  `json:"updatedAt"`
@@ -65,13 +66,13 @@ var ErrSlugTaken = errors.New("tournament slug already exists")
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 const columns = `id, slug, title, description, owner_id, created_by, status, config_version, created_at, updated_at,
-	registration_closes_at, starts_at, ends_at, completed_at`
+	registration_closes_at, starts_at, ends_at, completed_at, format`
 
 func scanDraft(row interface{ Scan(...any) error }) (Draft, error) {
 	var draft Draft
 	err := row.Scan(&draft.ID, &draft.Slug, &draft.Title, &draft.Description, &draft.OwnerID,
 		&draft.CreatedBy, &draft.Status, &draft.ConfigVersion, &draft.CreatedAt, &draft.UpdatedAt,
-		&draft.RegistrationClosesAt, &draft.StartsAt, &draft.EndsAt, &draft.CompletedAt)
+		&draft.RegistrationClosesAt, &draft.StartsAt, &draft.EndsAt, &draft.CompletedAt, &draft.Format)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Draft{}, access.ErrNotFound
 	}

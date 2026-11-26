@@ -93,6 +93,19 @@ func (s *Service) CreateTaskSubmission(
 	taskID uuid.UUID,
 	input CreateSubmissionRequest,
 ) (*Submission, error) {
+	return s.createTaskSubmission(ctx, userID, taskID, nil, input)
+}
+
+func (s *Service) CreateContestSubmission(
+	ctx context.Context, userID, tournamentID, taskID uuid.UUID, input CreateSubmissionRequest,
+) (*Submission, error) {
+	id := tournamentID.String()
+	return s.createTaskSubmission(ctx, userID, taskID, &id, input)
+}
+
+func (s *Service) createTaskSubmission(
+	ctx context.Context, userID, taskID uuid.UUID, tournamentID *string, input CreateSubmissionRequest,
+) (*Submission, error) {
 	task, err := s.taskRepo.GetByID(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -123,7 +136,7 @@ func (s *Service) CreateTaskSubmission(
 	now := time.Now().UTC()
 	sub := &Submission{
 		ID:              uuid.NewString(),
-		MatchID:         nil,
+		TournamentID:    tournamentID,
 		TaskID:          taskID.String(),
 		UserID:          userID.String(),
 		Language:        strings.TrimSpace(input.Language),
@@ -145,7 +158,7 @@ func (s *Service) CreateTaskSubmission(
 	if err == nil {
 		s.publishSubmission(ctx, "submission.created", full, tests)
 	}
-	s.recordSubmissionCreated("task", sub.Language, "success")
+	s.recordSubmissionCreated(submissionScope(sub), sub.Language, "success")
 	return full, err
 }
 
@@ -586,6 +599,9 @@ func (s *Service) recordCodeRunFinished(language string, status string, verdict 
 func submissionScope(sub *Submission) string {
 	if sub != nil && sub.MatchID != nil {
 		return "match"
+	}
+	if sub != nil && sub.TournamentID != nil {
+		return "contest"
 	}
 
 	return "task"

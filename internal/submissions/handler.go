@@ -25,6 +25,7 @@ func NewHandler(service *Service, callbackToken string) *Handler {
 
 func (h *Handler) RegisterRoutes(api fiber.Router, internal fiber.Router) {
 	api.Post("/tasks/:taskId/submissions", h.CreateTaskSubmission)
+	api.Post("/tournaments/:tournamentId/problems/:taskId/submissions", h.CreateContestSubmission)
 	api.Post("/tasks/:taskId/runs", h.CreateTaskCodeRun)
 	api.Post("/matches/:matchId/submissions", h.CreateMatchSubmission)
 	api.Get("/submissions/:submissionId", h.GetSubmission)
@@ -89,6 +90,30 @@ func (h *Handler) CreateMatchSubmission(c *fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(ToSubmissionResponse(full, tests))
+}
+
+func (h *Handler) CreateContestSubmission(c *fiber.Ctx) error {
+	userID, err := userIDFromCtx(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
+	}
+	tournamentID, err := uuid.Parse(c.Params("tournamentId"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid tournament id")
+	}
+	taskID, err := uuid.Parse(c.Params("taskId"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid task id")
+	}
+	var req CreateSubmissionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+	}
+	sub, err := h.service.CreateContestSubmission(c.UserContext(), userID, tournamentID, taskID, req)
+	if err != nil {
+		return mapServiceError(err)
+	}
+	return c.Status(fiber.StatusCreated).JSON(ToSubmissionResponse(sub, nil))
 }
 
 func (h *Handler) CreateTaskCodeRun(c *fiber.Ctx) error {
@@ -178,8 +203,12 @@ func mapServiceError(err error) error {
 	switch {
 	case errors.Is(err, ErrSubmissionNotFound):
 		return fiber.NewError(fiber.StatusNotFound, err.Error())
-	case errors.Is(err, ErrTaskNotFound):
+	case errors.Is(err, ErrTaskNotFound), errors.Is(err, ErrContestProblemNotFound):
 		return fiber.NewError(fiber.StatusNotFound, err.Error())
+	case errors.Is(err, ErrContestNotJoined):
+		return fiber.NewError(fiber.StatusForbidden, err.Error())
+	case errors.Is(err, ErrContestSubmissionWindow):
+		return fiber.NewError(fiber.StatusConflict, err.Error())
 	case errors.Is(err, ErrMatchNotFound):
 		return fiber.NewError(fiber.StatusNotFound, err.Error())
 	case errors.Is(err, ErrTaskInactive),

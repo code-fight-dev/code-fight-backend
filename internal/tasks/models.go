@@ -76,6 +76,7 @@ type UserTaskStats struct {
 type TaskSubmission struct {
 	ID                string                     `json:"id"`
 	MatchID           *string                    `json:"matchId,omitempty"`
+	TournamentID      *string                    `json:"tournamentId,omitempty"`
 	TaskID            string                     `json:"taskId"`
 	UserID            string                     `json:"userId"`
 	Language          string                     `json:"language"`
