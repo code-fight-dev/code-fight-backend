@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -140,10 +141,6 @@ func (s *Service) CreateTaskSubmission(
 		UpdatedAt:       now,
 	}
 
-	if err := s.repo.Create(ctx, sub); err != nil {
-		return nil, err
-	}
-
 	if err := s.sendToJudge(ctx, sub); err != nil {
 		return nil, err
 	}
@@ -207,10 +204,6 @@ func (s *Service) CreateTaskCodeRun(
 		Score:           0,
 		CreatedAt:       now,
 		UpdatedAt:       now,
-	}
-
-	if err := s.repo.CreateCodeRun(ctx, run); err != nil {
-		return nil, err
 	}
 
 	if err := s.sendCodeRunToJudge(ctx, run, input); err != nil {
@@ -290,10 +283,6 @@ func (s *Service) CreateMatchSubmission(
 		UpdatedAt:       now,
 	}
 
-	if err := s.repo.Create(ctx, sub); err != nil {
-		return nil, err
-	}
-
 	if err := s.sendToJudge(ctx, sub); err != nil {
 		return nil, err
 	}
@@ -356,6 +345,10 @@ func (s *Service) GetCodeRunByIDForUser(ctx context.Context, codeRunID string, u
 
 func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.CallbackPayload) error {
 	sub, err := s.repo.GetByJudgeSubmissionID(ctx, payload.JudgeSubmissionID)
+	// Judge can report progress before the acknowledgement reaches Backend.
+	if errors.Is(err, ErrSubmissionNotFound) && uuid.Validate(payload.SubmissionID) == nil {
+		sub, _, err = s.repo.GetByID(ctx, payload.SubmissionID)
+	}
 	if err != nil {
 		if errors.Is(err, ErrSubmissionNotFound) {
 			return s.HandleCodeRunJudgeCallback(ctx, payload)
@@ -365,6 +358,11 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 
 	if err := s.validateJudgeCallback(ctx, sub, payload); err != nil {
 		return err
+	}
+	if sub.JudgeSubmissionID == nil {
+		if err := s.repo.MarkSentToJudge(ctx, sub.ID, payload.JudgeSubmissionID, JudgeStatusQueued); err != nil {
+			return err
+		}
 	}
 
 	if staleJudgeCallback(sub.Status, sub.StartedAt, payload.StartedAt) {
@@ -457,12 +455,20 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 
 func (s *Service) HandleCodeRunJudgeCallback(ctx context.Context, payload judge.CallbackPayload) error {
 	run, err := s.repo.GetCodeRunByJudgeSubmissionID(ctx, payload.JudgeSubmissionID)
+	if errors.Is(err, ErrSubmissionNotFound) && uuid.Validate(payload.SubmissionID) == nil {
+		run, _, err = s.repo.GetCodeRunByID(ctx, payload.SubmissionID)
+	}
 	if err != nil {
 		return err
 	}
 
 	if err := s.validateCodeRunJudgeCallback(ctx, run, payload); err != nil {
 		return err
+	}
+	if run.JudgeSubmissionID == nil {
+		if err := s.repo.MarkCodeRunSentToJudge(ctx, run.ID, payload.JudgeSubmissionID, JudgeStatusQueued); err != nil {
+			return err
+		}
 	}
 
 	if staleJudgeCallback(run.Status, run.StartedAt, payload.StartedAt) {
@@ -584,7 +590,8 @@ func nullableVerdict(verdict *string) string {
 }
 
 func (s *Service) validateJudgeCallback(ctx context.Context, sub *Submission, payload judge.CallbackPayload) error {
-	if payload.SubmissionID != sub.ID {
+	if payload.SubmissionID != sub.ID || payload.JudgeSubmissionID == "" ||
+		(sub.JudgeSubmissionID != nil && *sub.JudgeSubmissionID != payload.JudgeSubmissionID) {
 		return ErrJudgeCallbackUnauthorized
 	}
 
@@ -634,7 +641,8 @@ func (s *Service) validateJudgeCallback(ctx context.Context, sub *Submission, pa
 }
 
 func (s *Service) validateCodeRunJudgeCallback(ctx context.Context, run *CodeRun, payload judge.CallbackPayload) error {
-	if payload.SubmissionID != run.ID {
+	if payload.SubmissionID != run.ID || payload.JudgeSubmissionID == "" ||
+		(run.JudgeSubmissionID != nil && *run.JudgeSubmissionID != payload.JudgeSubmissionID) {
 		return ErrJudgeCallbackUnauthorized
 	}
 
@@ -809,6 +817,10 @@ func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 		})
 	}
 
+	if err := s.repo.Create(ctx, sub); err != nil {
+		return err
+	}
+
 	resp, err := s.judgeClient.Submit(ctx, judge.SubmitRequest{
 		SubmissionID:    sub.ID,
 		TaskID:          sub.TaskID,
@@ -826,7 +838,12 @@ func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 		Tests: judgeTests,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)
+		if rejected, ok := judgeRejection(err); ok {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			err = errors.Join(err, s.repo.Complete(cleanupCtx, sub.ID, rejected, nil))
+		}
+		return fmt.Errorf("%w: %w", ErrJudgeSubmitFailed, err)
 	}
 
 	if err := s.repo.MarkSentToJudge(ctx, sub.ID, resp.JudgeSubmissionID, resp.Status); err != nil {
@@ -894,6 +911,10 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun, input Cr
 		return fmt.Errorf("task has no active sample test cases")
 	}
 
+	if err := s.repo.CreateCodeRun(ctx, run); err != nil {
+		return err
+	}
+
 	resp, err := s.judgeClient.Submit(ctx, judge.SubmitRequest{
 		SubmissionID:    run.ID,
 		TaskID:          run.TaskID,
@@ -911,7 +932,12 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun, input Cr
 		Tests: judgeTests,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)
+		if rejected, ok := judgeRejection(err); ok {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			err = errors.Join(err, s.repo.CompleteCodeRun(cleanupCtx, run.ID, rejected, nil))
+		}
+		return fmt.Errorf("%w: %w", ErrJudgeSubmitFailed, err)
 	}
 
 	if err := s.repo.MarkCodeRunSentToJudge(ctx, run.ID, resp.JudgeSubmissionID, resp.Status); err != nil {
@@ -919,6 +945,19 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun, input Cr
 	}
 
 	return nil
+}
+
+func judgeRejection(err error) (CompleteInput, bool) {
+	var rejection *judge.SubmitHTTPError
+	if !errors.As(err, &rejection) || rejection.Status != http.StatusBadRequest ||
+		(rejection.Code != "validation_error" && rejection.Code != "invalid_json") {
+		return CompleteInput{}, false
+	}
+	message := "Judge rejected this execution request"
+	finishedAt := time.Now().UTC()
+	return CompleteInput{
+		Status: StatusFailed, JudgeStatus: JudgeStatusFailed, ErrorMessage: &message, FinishedAt: &finishedAt,
+	}, true
 }
 
 func isCustomCodeRunTestID(testID string) bool {

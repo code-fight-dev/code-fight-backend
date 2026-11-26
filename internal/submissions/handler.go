@@ -191,6 +191,8 @@ func mapServiceError(err error) error {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrJudgeCallbackUnauthorized):
 		return fiber.NewError(fiber.StatusUnauthorized, err.Error())
+	case errors.Is(err, ErrJudgeActiveLimit):
+		return fiber.NewError(fiber.StatusTooManyRequests, err.Error())
 	default:
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}

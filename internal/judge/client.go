@@ -16,6 +16,15 @@ type Client interface {
 	SupportedLanguages(ctx context.Context) ([]SupportedLanguage, error)
 }
 
+type SubmitHTTPError struct {
+	Status int
+	Code   string
+}
+
+func (e *SubmitHTTPError) Error() string {
+	return fmt.Sprintf("judge submit: unexpected status %d", e.Status)
+}
+
 type HTTPClient struct {
 	baseURL    string
 	apiToken   string
@@ -68,7 +77,11 @@ func (c *HTTPClient) Submit(ctx context.Context, req SubmitRequest) (*SubmitResp
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("judge submit: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(rawBody)))
+		var response struct {
+			Code string `json:"error"`
+		}
+		_ = json.Unmarshal(rawBody, &response)
+		return nil, &SubmitHTTPError{Status: resp.StatusCode, Code: response.Code}
 	}
 
 	var out SubmitResponse

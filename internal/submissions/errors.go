@@ -15,5 +15,6 @@ var (
 	ErrInvalidSourceCode          = errors.New("invalid source code")
 	ErrJudgeCallbackUnauthorized  = errors.New("judge callback unauthorized")
 	ErrJudgeSubmitFailed          = errors.New("failed to submit to judge")
+	ErrJudgeActiveLimit           = errors.New("too many active judge jobs")
 	ErrDuplicateJudgeSubmissionID = errors.New("duplicate judge submission id")
 )

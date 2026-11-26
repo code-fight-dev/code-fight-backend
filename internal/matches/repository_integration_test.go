@@ -2,6 +2,7 @@ package matches
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,6 +12,86 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestRepositoryConcurrentRatedMatchFinalization(t *testing.T) {
+	db, ctx := testsupport.RequirePostgres(t)
+	repo := NewRepository(db)
+	player1 := createMatchTestUser(t, db, ctx, "p1")
+	player2 := createMatchTestUser(t, db, ctx, "p2")
+	taskID := createMatchTestTask(t, db, ctx)
+	match, err := repo.CreateMatch(ctx, Match{
+		ID: uuid.New(), Player1ID: player1, Player2ID: player2,
+		TaskID: &taskID, TaskMode: TaskModeNormal, RatingMode: "global",
+		Status: MatchStatusPending, JudgeStatus: JudgeStatusNotStarted, IsRated: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.StartMatch(ctx, match.ID, player1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	running, err := repo.StartMatch(ctx, match.ID, player2, time.Minute)
+	if err != nil || running.ExpiresAt == nil {
+		t.Fatalf("start match: %#v, %v", running, err)
+	}
+	reconnected, err := repo.GetCurrentMatch(ctx, player1)
+	if err != nil || reconnected.ID != running.ID || reconnected.ExpiresAt == nil ||
+		!reconnected.ExpiresAt.Equal(*running.ExpiresAt) {
+		t.Fatalf("reconnected match: %#v, %v", reconnected, err)
+	}
+
+	start := make(chan struct{})
+	type outcome struct {
+		applied bool
+		err     error
+	}
+	outcomes := make(chan outcome, 4)
+	results := []FinishMatchInput{
+		{MatchID: match.ID, WinnerID: &player1, ResultType: MatchResultTypePlayer1Win, WinningReason: WinningReasonAcceptedFaster},
+		{MatchID: match.ID, WinnerID: &player2, ResultType: MatchResultTypePlayer2Win, WinningReason: WinningReasonAcceptedFaster},
+	}
+	for _, input := range []FinishMatchInput{results[0], results[1], results[0]} {
+		go func() {
+			<-start
+			err := repo.FinishMatch(ctx, input)
+			if errors.Is(err, ErrRatingAlreadyApplied) {
+				outcomes <- outcome{}
+				return
+			}
+			outcomes <- outcome{applied: err == nil, err: err}
+		}()
+	}
+	go func() {
+		<-start
+		applied, err := repo.finishExpiredMatch(ctx, match.ID, running.ExpiresAt.Add(time.Second))
+		outcomes <- outcome{applied: applied, err: err}
+	}()
+	close(start)
+
+	applied := 0
+	for range cap(outcomes) {
+		outcome := <-outcomes
+		if outcome.err != nil {
+			t.Errorf("finalize match: %v", outcome.err)
+		}
+		if outcome.applied {
+			applied++
+		}
+	}
+	if applied != 1 {
+		t.Fatalf("finalized %d times, want once", applied)
+	}
+	final, err := repo.GetMatch(ctx, match.ID)
+	if err != nil || final.Status != MatchStatusFinished || !final.RatingApplied || final.ResultType == nil {
+		t.Fatalf("final match: %#v, %v", final, err)
+	}
+	var entries, players int
+	err = db.QueryRow(ctx, "select count(*), count(distinct user_id) from rating_history where match_id = $1", match.ID).
+		Scan(&entries, &players)
+	if err != nil || entries != 2 || players != 2 {
+		t.Fatalf("rating history: %d entries for %d players, %v", entries, players, err)
+	}
+}
 
 func TestRepositoryIntegrationMatchLifecycleAndQueue(t *testing.T) {
 	db, ctx := testsupport.RequirePostgres(t)
