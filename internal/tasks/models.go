@@ -95,8 +95,6 @@ type TaskSubmission struct {
 	Score             int                        `json:"score"`
 	ExitCode          *int                       `json:"exitCode,omitempty"`
 	CompileLog        *string                    `json:"compileLog,omitempty"`
-	StdoutTruncated   *string                    `json:"stdoutTruncated,omitempty"`
-	StderrTruncated   *string                    `json:"stderrTruncated,omitempty"`
 	CreatedAt         string                     `json:"createdAt"`
 	StartedAt         *string                    `json:"startedAt,omitempty"`
 	FinishedAt        *string                    `json:"finishedAt,omitempty"`

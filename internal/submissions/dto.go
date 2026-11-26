@@ -60,8 +60,6 @@ type SubmissionResponse struct {
 	Score             int                       `json:"score"`
 	ExitCode          *int                      `json:"exit_code,omitempty"`
 	CompileLog        *string                   `json:"compile_log,omitempty"`
-	StdoutTruncated   *string                   `json:"stdout_truncated,omitempty"`
-	StderrTruncated   *string                   `json:"stderr_truncated,omitempty"`
 	CreatedAt         string                    `json:"created_at"`
 	StartedAt         *string                   `json:"started_at,omitempty"`
 	FinishedAt        *string                   `json:"finished_at,omitempty"`
@@ -119,8 +117,6 @@ func ToSubmissionResponse(s *Submission, tests []SubmissionTestResult) Submissio
 		Score:             s.Score,
 		ExitCode:          s.ExitCode,
 		CompileLog:        s.CompileLog,
-		StdoutTruncated:   s.StdoutTruncated,
-		StderrTruncated:   s.StderrTruncated,
 		CreatedAt:         s.CreatedAt.Format(timeLayout),
 		UpdatedAt:         s.UpdatedAt.Format(timeLayout),
 		TestResults:       make([]SubmissionTestResultDTO, 0, len(tests)),
