@@ -2,16 +2,108 @@ package submissions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"code-fight-backend/internal/auth"
+	"code-fight-backend/internal/judge"
 	"code-fight-backend/internal/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type synchronousJudgeRepository struct{ Repository }
+
+func TestPGJudgeAdmissionAfterLostAcknowledgement(t *testing.T) {
+	db, ctx := testsupport.RequirePostgres(t)
+	repo := NewPGRepository(db)
+	userID := createSubmissionTestUser(t, db, ctx)
+	taskID, _, _ := createSubmissionTestTask(t, db, ctx)
+	type acceptedJob struct{ submissionID, judgeID string }
+	accepted := make(chan acceptedJob, maxActiveJudgeJobsPerUser+1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/languages" {
+			_ = json.NewEncoder(w).Encode([]judge.SupportedLanguage{{Language: "go", Version: "1.24"}})
+			return
+		}
+		var req judge.SubmitRequest
+		if r.Method != http.MethodPost || r.URL.Path != "/submissions" || json.NewDecoder(r.Body).Decode(&req) != nil {
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		accepted <- acceptedJob{req.SubmissionID, uuid.NewString()}
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("drop Judge acknowledgement: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer server.Close()
+	service := NewService(synchronousJudgeRepository{repo}, NewPGTaskRepository(db), nil, judge.NewHTTPClient(server.URL, 5*time.Second, "token"),
+		nil, "http://backend/internal/judge/callback", "token", 10_000, nil)
+
+	for i := range maxActiveJudgeJobsPerUser {
+		var err error
+		if i%2 == 0 {
+			_, err = service.CreateTaskSubmission(ctx, userID, taskID, validSubmissionRequest())
+		} else {
+			_, err = service.CreateTaskCodeRun(ctx, userID, taskID, validCodeRunRequest())
+		}
+		if !errors.Is(err, ErrJudgeSubmitFailed) {
+			t.Fatalf("job %d should lose the acknowledgement, got %v", i, err)
+		}
+	}
+	for _, table := range []string{"submissions", "code_runs"} {
+		result, err := db.Exec(ctx, `update `+table+` set updated_at = now() - interval '1 hour'
+			where user_id = $1 and status = 'queued' and judge_submission_id is null`, userID)
+		if err != nil || result.RowsAffected() != 2 {
+			t.Fatalf("backdate unacknowledged %s: %v (%v)", table, err, result)
+		}
+	}
+	if _, err := service.CreateTaskSubmission(ctx, userID, taskID, validSubmissionRequest()); !errors.Is(err, ErrJudgeActiveLimit) {
+		t.Fatalf("fifth job must be blocked while all four are active: %v", err)
+	}
+	if len(accepted) != maxActiveJudgeJobsPerUser {
+		t.Fatalf("Judge received %d jobs", len(accepted))
+	}
+	// Recover both a submission and a code run from the authenticated callback.
+	verdict := VerdictAccepted
+	for i, table := range []string{"submissions", "code_runs"} {
+		job := <-accepted
+		startedAt := time.Now().UTC()
+		if err := service.HandleJudgeCallback(ctx, judge.CallbackPayload{
+			SubmissionID: job.submissionID, JudgeSubmissionID: job.judgeID,
+			JudgeStatus: JudgeStatusFinished, Verdict: &verdict, StartedAt: &startedAt, FinishedAt: &startedAt,
+		}); err != nil {
+			t.Fatalf("finish unacknowledged job %s: %v", job.submissionID, err)
+		}
+		acknowledge := repo.MarkSentToJudge
+		if i == 1 {
+			acknowledge = repo.MarkCodeRunSentToJudge
+		}
+		if err := acknowledge(ctx, job.submissionID, job.judgeID, JudgeStatusQueued); err != nil {
+			t.Fatalf("record late acknowledgement: %v", err)
+		}
+		var status string
+		if err := db.QueryRow(ctx, `select status from `+table+` where id=$1`, job.submissionID).Scan(&status); err != nil || status != StatusFinished {
+			t.Fatalf("late acknowledgement must preserve finished state: %q (%v)", status, err)
+		}
+	}
+	for range 2 {
+		if _, err := service.CreateTaskSubmission(ctx, userID, taskID, validSubmissionRequest()); !errors.Is(err, ErrJudgeSubmitFailed) {
+			t.Fatalf("job should reach Judge after a slot is released: %v", err)
+		}
+	}
+	if _, err := service.CreateTaskCodeRun(ctx, userID, taskID, validCodeRunRequest()); !errors.Is(err, ErrJudgeActiveLimit) {
+		t.Fatalf("job limit must still apply after both slots are filled: %v", err)
+	}
+}
 
 func TestPGRepositoryConcurrentJudgeAdmission(t *testing.T) {
 	db, ctx := testsupport.RequirePostgres(t)

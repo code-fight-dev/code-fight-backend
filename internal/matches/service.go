@@ -144,9 +144,6 @@ func (s *Service) createMatch(ctx context.Context, input CreateMatchInput, offer
 		return Match{}, err
 	}
 
-	if err := s.repo.RemoveQueuedPlayers(ctx, input.Player1ID, input.Player2ID); err != nil {
-		return Match{}, err
-	}
 	s.cancelQueuedMatchCheck(input.Player1ID)
 	s.cancelQueuedMatchCheck(input.Player2ID)
 
@@ -244,16 +241,7 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 		return QueueResult{}, err
 	}
 	if opponentID == nil {
-		if err := s.repo.EnqueuePlayer(ctx, input); err != nil {
-			return QueueResult{}, err
-		}
-		if queued, err := s.repo.GetQueuedPlayer(ctx, input.UserID); err == nil && queued != nil {
-			s.scheduleQueuedMatchCheck(*queued)
-		}
-		if s.notifier != nil {
-			s.notifier.Publish(input.UserID, "matchmaking.queued", QueueResult{Status: "queued"})
-		}
-		return QueueResult{Status: "queued"}, nil
+		return s.enqueuePlayer(ctx, input)
 	}
 
 	match, err := s.createMatch(ctx, CreateMatchInput{
@@ -263,6 +251,9 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 		TaskMode:   input.TaskMode,
 		IsRated:    input.IsRated,
 	}, "match.found")
+	if errors.Is(err, ErrPlayerAlreadyInMatch) {
+		return s.enqueuePlayer(ctx, input)
+	}
 	if err != nil {
 		return QueueResult{}, err
 	}
@@ -270,6 +261,28 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 	result := QueueResult{Status: "matched", Match: &match}
 	s.publishMatch("matchmaking.matched", match)
 	return result, nil
+}
+
+func (s *Service) enqueuePlayer(ctx context.Context, input JoinQueueInput) (QueueResult, error) {
+	if err := s.repo.EnqueuePlayer(ctx, input); err != nil {
+		if errors.Is(err, ErrPlayerAlreadyInMatch) {
+			match, lookupErr := s.repo.GetCurrentMatch(ctx, input.UserID)
+			if lookupErr != nil {
+				return QueueResult{}, lookupErr
+			}
+			if match.ID != uuid.Nil {
+				return QueueResult{Status: "matched", Match: &match}, nil
+			}
+		}
+		return QueueResult{}, err
+	}
+	if queued, err := s.repo.GetQueuedPlayer(ctx, input.UserID); err == nil && queued != nil {
+		s.scheduleQueuedMatchCheck(*queued)
+	}
+	if s.notifier != nil {
+		s.notifier.Publish(input.UserID, "matchmaking.queued", QueueResult{Status: "queued"})
+	}
+	return QueueResult{Status: "queued"}, nil
 }
 
 func (s *Service) LeaveQueue(ctx context.Context, userID uuid.UUID) error {

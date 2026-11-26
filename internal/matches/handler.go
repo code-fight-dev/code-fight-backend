@@ -447,6 +447,7 @@ func writeMatchError(c *fiber.Ctx, err error) error {
 
 	case errors.Is(err, ErrTaskNotAssigned),
 		errors.Is(err, ErrMatchAlreadyStarted),
+		errors.Is(err, ErrPlayerAlreadyInMatch),
 		errors.Is(err, ErrMatchAlreadyFinished),
 		errors.Is(err, ErrMatchCancelled),
 		errors.Is(err, ErrRatingAlreadyApplied),
