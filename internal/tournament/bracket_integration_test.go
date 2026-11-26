@@ -112,7 +112,11 @@ func TestBracketLifecycle(t *testing.T) {
 			if advanced, err := s.advanceSchedule(ctx); advanced || err != nil {
 				t.Fatal("draw advanced", advanced, err)
 			}
-			play(*semi.FixtureID, false)
+			semiWinner := play(*semi.FixtureID, false)
+			history, err := s.History(ctx, semiWinner, 10, "")
+			if err != nil || len(history.Items) != 1 || history.Items[0].Played != 2 || history.Items[0].Draws != 1 || history.Items[0].Wins != 1 {
+				t.Fatalf("history after replay = %+v, %v", history, err)
+			}
 			step()
 			final := board().Bracket.Slots[2]
 			if final.FixtureID == nil || final.Player1ID == nil || final.Player2ID == nil {

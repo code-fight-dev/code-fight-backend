@@ -59,7 +59,7 @@ func (s *Service) History(ctx context.Context, userID uuid.UUID, limit int, rawC
 		cross join lateral (
 			select count(*) as played, count(*) filter (where m.winner_id=p.user_id) as wins,
 				count(*) filter (where m.result_type='draw') as draws
-			from tournament_fixtures f join matches m on m.id=f.match_id and m.status='finished'
+			from tournament_fixtures f join matches m on m.tournament_fixture_id=f.id and m.status='finished'
 			where f.tournament_id=t.id and p.user_id in (f.player1_id,f.player2_id)
 		) score
 		where p.user_id=$1 and t.status <> 'draft'

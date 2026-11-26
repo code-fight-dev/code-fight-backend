@@ -86,7 +86,7 @@ from tournament_participants p
 join users u on u.id=p.user_id
 left join tournament_fixtures f on f.tournament_id=p.tournament_id
     and p.user_id in (f.player1_id, f.player2_id)
-left join matches m on m.id=f.match_id and m.status='finished'
+left join matches m on m.tournament_fixture_id=f.id and m.status='finished'
 where p.tournament_id=$1
 group by p.user_id,u.username
 )`
