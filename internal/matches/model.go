@@ -197,12 +197,13 @@ type SelectedTask struct {
 }
 
 type ApplySubmissionProgressInput struct {
-	MatchID     uuid.UUID
-	UserID      uuid.UUID
-	Score       int
-	IsAccepted  bool
-	SolvedAt    *time.Time
-	JudgeStatus *string
+	SubmissionID uuid.UUID
+	MatchID      uuid.UUID
+	UserID       uuid.UUID
+	Score        int
+	IsAccepted   bool
+	SolvedAt     *time.Time
+	JudgeStatus  *string
 }
 
 type MatchSubmission struct {

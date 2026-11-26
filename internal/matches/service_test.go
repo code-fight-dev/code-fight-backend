@@ -510,13 +510,13 @@ func (r *fakeMatchServiceRepo) GetPublicStats(context.Context) (PublicStats, err
 	return r.publicStats, nil
 }
 
-func (r *fakeMatchServiceRepo) ApplySubmissionProgress(_ context.Context, input ApplySubmissionProgressInput) error {
+func (r *fakeMatchServiceRepo) ApplySubmissionProgress(_ context.Context, input ApplySubmissionProgressInput) (bool, error) {
 	if r.progressErr != nil {
-		return r.progressErr
+		return false, r.progressErr
 	}
 	copied := input
 	r.progressInput = &copied
-	return nil
+	return true, nil
 }
 
 func (r *fakeMatchServiceRepo) ListMatchReplayTimelineEvents(context.Context, uuid.UUID) ([]MatchReplayCapturedEvent, error) {
