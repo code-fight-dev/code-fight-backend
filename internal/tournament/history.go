@@ -13,16 +13,18 @@ import (
 
 type Participation struct {
 	Schedule
-	TournamentID uuid.UUID  `json:"tournamentId"`
-	Slug         string     `json:"slug"`
-	Title        string     `json:"title"`
-	Status       string     `json:"status"`
-	JoinedAt     *time.Time `json:"joinedAt"`
-	CompletedAt  *time.Time `json:"completedAt"`
-	Played       int        `json:"played"`
-	Wins         int        `json:"wins"`
-	Draws        int        `json:"draws"`
-	Points       int        `json:"points"`
+	TournamentID        uuid.UUID  `json:"tournamentId"`
+	Slug                string     `json:"slug"`
+	Title               string     `json:"title"`
+	Status              string     `json:"status"`
+	JoinedAt            *time.Time `json:"joinedAt"`
+	CompletedAt         *time.Time `json:"completedAt"`
+	Played              int        `json:"played"`
+	Wins                int        `json:"wins"`
+	Draws               int        `json:"draws"`
+	Points              int        `json:"points"`
+	ContestRatingBefore *int       `json:"contestRatingBefore"`
+	ContestRatingAfter  *int       `json:"contestRatingAfter"`
 }
 
 type HistoryPage struct {
@@ -45,8 +47,10 @@ func (s *Service) History(ctx context.Context, userID uuid.UUID, limit int, rawC
 	}
 	defer cleanup()
 	rows, err := tx.Query(ctx, `select t.id,t.slug,t.title,t.status,p.joined_at,t.completed_at,
-		t.registration_closes_at,t.starts_at,t.ends_at,score.played,score.wins,score.draws,coalesce(p.joined_at,t.created_at)
+		t.registration_closes_at,t.starts_at,t.ends_at,score.played,score.wins,score.draws,coalesce(p.joined_at,t.created_at),
+		c.rating_before,c.rating_after
 		from tournament_participants p join tournaments t on t.id=p.tournament_id
+		left join contest_rating_changes c on c.tournament_id=t.id and c.user_id=p.user_id
 		cross join lateral (
 			select count(*) as played, count(*) filter (where m.winner_id=p.user_id) as wins,
 				count(*) filter (where m.result_type='draw') as draws
@@ -66,7 +70,8 @@ func (s *Service) History(ctx context.Context, userID uuid.UUID, limit int, rawC
 		var item Participation
 		var orderedAt time.Time
 		if err := rows.Scan(&item.TournamentID, &item.Slug, &item.Title, &item.Status, &item.JoinedAt, &item.CompletedAt,
-			&item.RegistrationClosesAt, &item.StartsAt, &item.EndsAt, &item.Played, &item.Wins, &item.Draws, &orderedAt); err != nil {
+			&item.RegistrationClosesAt, &item.StartsAt, &item.EndsAt, &item.Played, &item.Wins, &item.Draws, &orderedAt,
+			&item.ContestRatingBefore, &item.ContestRatingAfter); err != nil {
 			return HistoryPage{}, err
 		}
 		if len(page.Items) == limit {

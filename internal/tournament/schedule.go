@@ -59,7 +59,10 @@ func updateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status string) e
 	_, err := tx.Exec(ctx, `update tournaments set status=$2, config_version=config_version+1,
 		completed_at=case when $2='completed' then clock_timestamp() else completed_at end,
 		updated_at=clock_timestamp() where id=$1`, id, status)
-	return err
+	if err != nil || status != "completed" {
+		return err
+	}
+	return applyContestRating(ctx, tx, id)
 }
 
 func (s *Service) RunSchedule(ctx context.Context, logger *slog.Logger) {
