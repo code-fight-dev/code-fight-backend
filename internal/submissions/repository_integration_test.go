@@ -17,6 +17,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type synchronousJudgeRepository struct{ Repository }
+
 func TestPGJudgeAdmissionAfterLostAcknowledgement(t *testing.T) {
 	db, ctx := testsupport.RequirePostgres(t)
 	repo := NewPGRepository(db)
@@ -43,7 +45,7 @@ func TestPGJudgeAdmissionAfterLostAcknowledgement(t *testing.T) {
 		_ = conn.Close()
 	}))
 	defer server.Close()
-	service := NewService(repo, NewPGTaskRepository(db), nil, judge.NewHTTPClient(server.URL, 5*time.Second, "token"),
+	service := NewService(synchronousJudgeRepository{repo}, NewPGTaskRepository(db), nil, judge.NewHTTPClient(server.URL, 5*time.Second, "token"),
 		nil, "http://backend/internal/judge/callback", "token", 10_000, nil)
 
 	for i := range maxActiveJudgeJobsPerUser {

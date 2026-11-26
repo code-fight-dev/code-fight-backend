@@ -44,12 +44,12 @@ func TestRepositoryReadAndQueueMethodsWithFakeDB(t *testing.T) {
 		},
 		rowResults: []*fakePGRow{
 			{values: matchValues},
-			{values: matchValues},
 			{values: []any{player2}},
 			{err: pgx.ErrNoRows},
 			{values: []any{player1, "global", TaskModeNormal, true, now}},
 			{values: []any{3, 4}},
 		},
+		tx: &fakeMatchTx{rowResults: []*fakePGRow{{values: []any{false}}, {values: matchValues}, {values: []any{false}}}},
 		execTags: []pgconn.CommandTag{
 			pgconn.NewCommandTag("INSERT 0 1"),
 			pgconn.NewCommandTag("DELETE 1"),
@@ -143,7 +143,7 @@ func TestRepositoryReadMethodsReturnDatabaseErrors(t *testing.T) {
 	}{
 		{
 			name: "create scan",
-			repo: &Repository{db: &fakeMatchDB{rowResults: []*fakePGRow{{err: dbErr}}}},
+			repo: &Repository{db: &fakeMatchDB{tx: &fakeMatchTx{rowResults: []*fakePGRow{{values: []any{false}}, {err: dbErr}}}}},
 			call: func(repo *Repository) error {
 				_, err := repo.CreateMatch(context.Background(), Match{ID: matchID})
 				return err
@@ -1444,8 +1444,6 @@ func fakeReplaySubmissionRow(matchID uuid.UUID, taskID uuid.UUID, userID uuid.UU
 		nil,
 		nil,
 		100,
-		nil,
-		nil,
 		nil,
 		nil,
 		now,

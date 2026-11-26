@@ -92,6 +92,10 @@ func (s *Service) SetMetrics(metrics Metrics) {
 }
 
 func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Match, error) {
+	return s.createMatch(ctx, input, "match.invited")
+}
+
+func (s *Service) createMatch(ctx context.Context, input CreateMatchInput, offerKind string) (Match, error) {
 	if input.Player1ID == uuid.Nil || input.Player2ID == uuid.Nil {
 		return Match{}, fmt.Errorf("create match: empty player id")
 	}
@@ -132,6 +136,7 @@ func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Matc
 		JudgeStatus:            JudgeStatusNotStarted,
 		IsRated:                input.IsRated,
 		RatingApplied:          false,
+		offerKind:              offerKind,
 	}
 
 	created, err := s.repo.CreateMatch(ctx, match)
@@ -139,9 +144,6 @@ func (s *Service) CreateMatch(ctx context.Context, input CreateMatchInput) (Matc
 		return Match{}, err
 	}
 
-	if err := s.repo.RemoveQueuedPlayers(ctx, input.Player1ID, input.Player2ID); err != nil {
-		return Match{}, err
-	}
 	s.cancelQueuedMatchCheck(input.Player1ID)
 	s.cancelQueuedMatchCheck(input.Player2ID)
 
@@ -239,25 +241,19 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 		return QueueResult{}, err
 	}
 	if opponentID == nil {
-		if err := s.repo.EnqueuePlayer(ctx, input); err != nil {
-			return QueueResult{}, err
-		}
-		if queued, err := s.repo.GetQueuedPlayer(ctx, input.UserID); err == nil && queued != nil {
-			s.scheduleQueuedMatchCheck(*queued)
-		}
-		if s.notifier != nil {
-			s.notifier.Publish(input.UserID, "matchmaking.queued", QueueResult{Status: "queued"})
-		}
-		return QueueResult{Status: "queued"}, nil
+		return s.enqueuePlayer(ctx, input)
 	}
 
-	match, err := s.CreateMatch(ctx, CreateMatchInput{
+	match, err := s.createMatch(ctx, CreateMatchInput{
 		Player1ID:  *opponentID,
 		Player2ID:  input.UserID,
 		RatingMode: input.RatingMode,
 		TaskMode:   input.TaskMode,
 		IsRated:    input.IsRated,
-	})
+	}, "match.found")
+	if errors.Is(err, ErrPlayerAlreadyInMatch) {
+		return s.enqueuePlayer(ctx, input)
+	}
 	if err != nil {
 		return QueueResult{}, err
 	}
@@ -265,6 +261,28 @@ func (s *Service) JoinQueue(ctx context.Context, input JoinQueueInput) (QueueRes
 	result := QueueResult{Status: "matched", Match: &match}
 	s.publishMatch("matchmaking.matched", match)
 	return result, nil
+}
+
+func (s *Service) enqueuePlayer(ctx context.Context, input JoinQueueInput) (QueueResult, error) {
+	if err := s.repo.EnqueuePlayer(ctx, input); err != nil {
+		if errors.Is(err, ErrPlayerAlreadyInMatch) {
+			match, lookupErr := s.repo.GetCurrentMatch(ctx, input.UserID)
+			if lookupErr != nil {
+				return QueueResult{}, lookupErr
+			}
+			if match.ID != uuid.Nil {
+				return QueueResult{Status: "matched", Match: &match}, nil
+			}
+		}
+		return QueueResult{}, err
+	}
+	if queued, err := s.repo.GetQueuedPlayer(ctx, input.UserID); err == nil && queued != nil {
+		s.scheduleQueuedMatchCheck(*queued)
+	}
+	if s.notifier != nil {
+		s.notifier.Publish(input.UserID, "matchmaking.queued", QueueResult{Status: "queued"})
+	}
+	return QueueResult{Status: "queued"}, nil
 }
 
 func (s *Service) LeaveQueue(ctx context.Context, userID uuid.UUID) error {
@@ -393,13 +411,13 @@ func (s *Service) runQueuedMatchCheck(userID uuid.UUID) {
 		return
 	}
 
-	match, err := s.CreateMatch(ctx, CreateMatchInput{
+	match, err := s.createMatch(ctx, CreateMatchInput{
 		Player1ID:  *opponentID,
 		Player2ID:  queued.UserID,
 		RatingMode: queued.RatingMode,
 		TaskMode:   queued.TaskMode,
 		IsRated:    queued.IsRated,
-	})
+	}, "match.found")
 	if err != nil {
 		s.scheduleQueuedMatchCheck(*queued)
 		return

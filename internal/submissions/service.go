@@ -116,12 +116,8 @@ func (s *Service) CreateTaskSubmission(
 		return nil, ErrTaskLanguageNotAllowed
 	}
 
-	supported, err := s.isJudgeLanguageSupported(ctx, input.Language, input.LanguageVersion)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)
-	}
-	if !supported {
-		return nil, ErrTaskLanguageNotAllowed
+	if err := s.validateJudgeLanguage(ctx, input.Language, input.LanguageVersion); err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -141,7 +137,7 @@ func (s *Service) CreateTaskSubmission(
 		UpdatedAt:       now,
 	}
 
-	if err := s.sendToJudge(ctx, sub); err != nil {
+	if err := s.persistSubmission(ctx, sub); err != nil {
 		return nil, err
 	}
 
@@ -182,12 +178,8 @@ func (s *Service) CreateTaskCodeRun(
 		return nil, ErrTaskLanguageNotAllowed
 	}
 
-	supported, err := s.isJudgeLanguageSupported(ctx, input.Language, input.LanguageVersion)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)
-	}
-	if !supported {
-		return nil, ErrTaskLanguageNotAllowed
+	if err := s.validateJudgeLanguage(ctx, input.Language, input.LanguageVersion); err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -206,7 +198,7 @@ func (s *Service) CreateTaskCodeRun(
 		UpdatedAt:       now,
 	}
 
-	if err := s.sendCodeRunToJudge(ctx, run, input); err != nil {
+	if err := s.persistCodeRun(ctx, run, input); err != nil {
 		return nil, err
 	}
 
@@ -257,12 +249,8 @@ func (s *Service) CreateMatchSubmission(
 		return nil, ErrTaskLanguageNotAllowed
 	}
 
-	supported, err := s.isJudgeLanguageSupported(ctx, input.Language, input.LanguageVersion)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)
-	}
-	if !supported {
-		return nil, ErrTaskLanguageNotAllowed
+	if err := s.validateJudgeLanguage(ctx, input.Language, input.LanguageVersion); err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -283,7 +271,7 @@ func (s *Service) CreateMatchSubmission(
 		UpdatedAt:       now,
 	}
 
-	if err := s.sendToJudge(ctx, sub); err != nil {
+	if err := s.persistSubmission(ctx, sub); err != nil {
 		return nil, err
 	}
 
@@ -406,22 +394,20 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 	}
 
 	err = s.repo.Complete(ctx, sub.ID, CompleteInput{
-		Status:          finalStatus,
-		JudgeStatus:     payload.JudgeStatus,
-		Verdict:         payload.Verdict,
-		ErrorMessage:    payload.ErrorMessage,
-		PassedTests:     payload.PassedTests,
-		TotalTests:      payload.TotalTests,
-		CompileTimeMs:   payload.CompileTimeMs,
-		RunTimeMs:       payload.RunTimeMs,
-		PeakMemoryKb:    payload.PeakMemoryKb,
-		Score:           payload.Score,
-		ExitCode:        payload.ExitCode,
-		CompileLog:      payload.CompileLog,
-		StdoutTruncated: payload.StdoutTruncated,
-		StderrTruncated: payload.StderrTruncated,
-		StartedAt:       payload.StartedAt,
-		FinishedAt:      payload.FinishedAt,
+		Status:        finalStatus,
+		JudgeStatus:   payload.JudgeStatus,
+		Verdict:       payload.Verdict,
+		ErrorMessage:  payload.ErrorMessage,
+		PassedTests:   payload.PassedTests,
+		TotalTests:    payload.TotalTests,
+		CompileTimeMs: payload.CompileTimeMs,
+		RunTimeMs:     payload.RunTimeMs,
+		PeakMemoryKb:  payload.PeakMemoryKb,
+		Score:         payload.Score,
+		ExitCode:      payload.ExitCode,
+		CompileLog:    payload.CompileLog,
+		StartedAt:     payload.StartedAt,
+		FinishedAt:    payload.FinishedAt,
 	}, tests)
 	if err != nil {
 		if errors.Is(err, ErrStaleJudgeCallback) {
@@ -771,19 +757,19 @@ func (s *Service) validateCodeRunInput(input CreateCodeRunRequest) error {
 	return nil
 }
 
-func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
+func (s *Service) submissionDispatch(ctx context.Context, sub *Submission) (judge.SubmitRequest, error) {
 	limits, err := s.repo.GetJudgeTaskLimits(ctx, sub.TaskID)
 	if err != nil {
-		return fmt.Errorf("get judge task limits: %w", err)
+		return judge.SubmitRequest{}, fmt.Errorf("get judge task limits: %w", err)
 	}
 
 	taskTests, err := s.repo.ListJudgeTaskTestCases(ctx, sub.TaskID)
 	if err != nil {
-		return fmt.Errorf("list judge task test cases: %w", err)
+		return judge.SubmitRequest{}, fmt.Errorf("list judge task test cases: %w", err)
 	}
 
 	if len(taskTests) == 0 {
-		return fmt.Errorf("task has no active test cases")
+		return judge.SubmitRequest{}, fmt.Errorf("task has no active test cases")
 	}
 
 	timeMS := limits.TimeLimitMS
@@ -817,11 +803,7 @@ func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 		})
 	}
 
-	if err := s.repo.Create(ctx, sub); err != nil {
-		return err
-	}
-
-	resp, err := s.judgeClient.Submit(ctx, judge.SubmitRequest{
+	return judge.SubmitRequest{
 		SubmissionID:    sub.ID,
 		TaskID:          sub.TaskID,
 		Language:        sub.Language,
@@ -836,7 +818,18 @@ func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 			OutputKB: 64,
 		},
 		Tests: judgeTests,
-	})
+	}, nil
+}
+
+func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
+	req, err := s.submissionDispatch(ctx, sub)
+	if err != nil {
+		return err
+	}
+	if err := s.repo.Create(ctx, sub); err != nil {
+		return err
+	}
+	resp, err := s.judgeClient.Submit(ctx, req)
 	if err != nil {
 		if rejected, ok := judgeRejection(err); ok {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -853,15 +846,15 @@ func (s *Service) sendToJudge(ctx context.Context, sub *Submission) error {
 	return nil
 }
 
-func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun, input CreateCodeRunRequest) error {
+func (s *Service) codeRunDispatch(ctx context.Context, run *CodeRun, input CreateCodeRunRequest) (judge.SubmitRequest, error) {
 	limits, err := s.repo.GetJudgeTaskLimits(ctx, run.TaskID)
 	if err != nil {
-		return fmt.Errorf("get judge task limits: %w", err)
+		return judge.SubmitRequest{}, fmt.Errorf("get judge task limits: %w", err)
 	}
 
 	taskTests, err := s.repo.ListJudgeTaskSampleTestCases(ctx, run.TaskID)
 	if err != nil {
-		return fmt.Errorf("list judge task sample test cases: %w", err)
+		return judge.SubmitRequest{}, fmt.Errorf("list judge task sample test cases: %w", err)
 	}
 
 	timeMS := limits.TimeLimitMS
@@ -908,14 +901,10 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun, input Cr
 	}
 
 	if len(judgeTests) == 0 {
-		return fmt.Errorf("task has no active sample test cases")
+		return judge.SubmitRequest{}, fmt.Errorf("task has no active sample test cases")
 	}
 
-	if err := s.repo.CreateCodeRun(ctx, run); err != nil {
-		return err
-	}
-
-	resp, err := s.judgeClient.Submit(ctx, judge.SubmitRequest{
+	return judge.SubmitRequest{
 		SubmissionID:    run.ID,
 		TaskID:          run.TaskID,
 		Language:        run.Language,
@@ -930,7 +919,18 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun, input Cr
 			OutputKB: 64,
 		},
 		Tests: judgeTests,
-	})
+	}, nil
+}
+
+func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun, input CreateCodeRunRequest) error {
+	req, err := s.codeRunDispatch(ctx, run, input)
+	if err != nil {
+		return err
+	}
+	if err := s.repo.CreateCodeRun(ctx, run); err != nil {
+		return err
+	}
+	resp, err := s.judgeClient.Submit(ctx, req)
 	if err != nil {
 		if rejected, ok := judgeRejection(err); ok {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -947,10 +947,14 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun, input Cr
 	return nil
 }
 
-func judgeRejection(err error) (CompleteInput, bool) {
+func permanentJudgeRejection(err error) bool {
 	var rejection *judge.SubmitHTTPError
-	if !errors.As(err, &rejection) || rejection.Status != http.StatusBadRequest ||
-		(rejection.Code != "validation_error" && rejection.Code != "invalid_json") {
+	return errors.As(err, &rejection) && (rejection.Status == http.StatusRequestEntityTooLarge ||
+		rejection.Status == http.StatusBadRequest && (rejection.Code == "validation_error" || rejection.Code == "invalid_json"))
+}
+
+func judgeRejection(err error) (CompleteInput, bool) {
+	if !permanentJudgeRejection(err) {
 		return CompleteInput{}, false
 	}
 	message := "Judge rejected this execution request"
@@ -978,10 +982,15 @@ func codeRunResultTestIdentity(testID string) (*string, *string, bool) {
 	return &cleaned, nil, false
 }
 
-func (s *Service) isJudgeLanguageSupported(ctx context.Context, language, version string) (bool, error) {
+func (s *Service) validateJudgeLanguage(ctx context.Context, language, version string) error {
+	// For queued requests, the task allow-list is checked at admission and
+	// Judge validates its runtime when the dispatcher delivers the request.
+	if _, durable := s.repo.(dispatchRepository); durable {
+		return nil
+	}
 	supported, err := s.judgeClient.SupportedLanguages(ctx)
 	if err != nil {
-		return false, err
+		return fmt.Errorf("%w: %v", ErrJudgeSubmitFailed, err)
 	}
 
 	language = strings.TrimSpace(language)
@@ -989,11 +998,11 @@ func (s *Service) isJudgeLanguageSupported(ctx context.Context, language, versio
 
 	for _, item := range supported {
 		if strings.TrimSpace(item.Language) == language && strings.TrimSpace(item.Version) == version {
-			return true, nil
+			return nil
 		}
 	}
 
-	return false, nil
+	return ErrTaskLanguageNotAllowed
 }
 
 func (s *Service) publishSubmission(ctx context.Context, eventType string, sub *Submission, tests []SubmissionTestResult) {

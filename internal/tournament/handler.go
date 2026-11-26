@@ -17,6 +17,11 @@ type draftService interface {
 	GetDraft(context.Context, uuid.UUID, uuid.UUID) (Draft, error)
 	ListDrafts(context.Context, uuid.UUID, int, string) (Page, error)
 	UpdateDraft(context.Context, uuid.UUID, uuid.UUID, UpdateInput, string) (Draft, error)
+	ListPublished(context.Context) ([]Summary, error)
+	Board(context.Context, uuid.UUID) (Board, error)
+	Join(context.Context, uuid.UUID, uuid.UUID) error
+	Transition(context.Context, uuid.UUID, uuid.UUID, TransitionInput, string) error
+	ScheduleFixture(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string) (uuid.UUID, error)
 }
 type Handler struct{ service draftService }
 
@@ -27,6 +32,88 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/tournaments", h.create)
 	router.Get("/tournaments/:id", h.get)
 	router.Patch("/tournaments/:id", h.update)
+	router.Post("/tournaments/:id/status", h.transition)
+	router.Post("/tournaments/:id/fixtures/:fixtureId", h.schedule)
+}
+
+func (h *Handler) RegisterPublicRoutes(router fiber.Router, requireAuth fiber.Handler) {
+	router.Get("/tournaments", h.published)
+	router.Get("/tournaments/:id", h.board)
+	router.Post("/tournaments/:id/join", requireAuth, h.join)
+}
+
+func (h *Handler) published(c *fiber.Ctx) error {
+	items, err := h.service.ListPublished(c.UserContext())
+	if err != nil {
+		return respondError(c, err)
+	}
+	return c.JSON(fiber.Map{"items": items})
+}
+
+func (h *Handler) board(c *fiber.Ctx) error {
+	id, err := managementhttp.ParamID(c, "id")
+	if err != nil {
+		return respondError(c, err)
+	}
+	board, err := h.service.Board(c.UserContext(), id)
+	if err != nil {
+		return respondError(c, err)
+	}
+	return c.JSON(board)
+}
+
+func (h *Handler) join(c *fiber.Ctx) error {
+	actor, err := managementhttp.ActorID(c)
+	if err != nil {
+		return respondError(c, err)
+	}
+	id, err := managementhttp.ParamID(c, "id")
+	if err != nil {
+		return respondError(c, err)
+	}
+	if err := h.service.Join(c.UserContext(), actor, id); err != nil {
+		return respondError(c, err)
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *Handler) transition(c *fiber.Ctx) error {
+	actor, err := managementhttp.ActorID(c)
+	if err != nil {
+		return respondError(c, err)
+	}
+	id, err := managementhttp.ParamID(c, "id")
+	if err != nil {
+		return respondError(c, err)
+	}
+	var input TransitionInput
+	if err := managementhttp.Decode(c, &input); err != nil {
+		return respondError(c, err)
+	}
+	if err := h.service.Transition(c.UserContext(), actor, id, input, managementhttp.RequestID(c)); err != nil {
+		return respondError(c, err)
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *Handler) schedule(c *fiber.Ctx) error {
+	actor, err := managementhttp.ActorID(c)
+	if err != nil {
+		return respondError(c, err)
+	}
+	id, err := managementhttp.ParamID(c, "id")
+	if err != nil {
+		return respondError(c, err)
+	}
+	fixtureID, err := managementhttp.ParamID(c, "fixtureId")
+	if err != nil {
+		return respondError(c, err)
+	}
+	matchID, err := h.service.ScheduleFixture(c.UserContext(), actor, id, fixtureID, managementhttp.RequestID(c))
+	if err != nil {
+		return respondError(c, err)
+	}
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"matchId": matchID})
 }
 
 func respondError(c *fiber.Ctx, err error) error {

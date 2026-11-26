@@ -1,12 +1,14 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 type Handler struct {
@@ -352,4 +354,13 @@ func (h *Handler) RequireAuth(c *fiber.Ctx) error {
 	c.Locals("user", user)
 
 	return c.Next()
+}
+
+// StreamSessionCheck copies the cookie before Fiber recycles the request.
+func (h *Handler) StreamSessionCheck(c *fiber.Ctx) func(context.Context, uuid.UUID) bool {
+	token := strings.Clone(c.Cookies(h.cookieName))
+	return func(ctx context.Context, userID uuid.UUID) bool {
+		user, err := h.service.CurrentUser(ctx, token)
+		return err == nil && user.ID == userID
+	}
 }

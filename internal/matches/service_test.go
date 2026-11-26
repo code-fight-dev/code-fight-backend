@@ -34,9 +34,6 @@ func TestServiceCreateMatch(t *testing.T) {
 	if match.RatingMode != "global" || match.TaskMode != TaskModeNormal {
 		t.Fatalf("defaults = %#v", match)
 	}
-	if len(repo.removedQueued) != 2 {
-		t.Fatalf("removed queued = %#v", repo.removedQueued)
-	}
 	if notifier.eventType != "match.found" {
 		t.Fatalf("event = %q", notifier.eventType)
 	}

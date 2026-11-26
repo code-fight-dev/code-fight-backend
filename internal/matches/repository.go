@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	"code-fight-backend/internal/notifications"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -29,7 +30,48 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 }
 
 func (r *Repository) CreateMatch(ctx context.Context, match Match) (Match, error) {
-	row := r.db.QueryRow(
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return Match{}, fmt.Errorf("create match: %w", err)
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	if err := PreparePlayersForMatch(ctx, tx, match.Player1ID, match.Player2ID); err != nil {
+		return Match{}, fmt.Errorf("create match: %w", err)
+	}
+	created, err := createMatchRow(ctx, tx, match)
+	if err != nil {
+		return Match{}, err
+	}
+	if match.offerKind == "" {
+		return created, tx.Commit(ctx)
+	}
+	item := notifications.Item{Kind: match.offerKind, Href: "/arena/match/" + created.ID.String()}
+	if match.offerKind == "match.invited" {
+		var username string
+		if err := tx.QueryRow(ctx, "select username from users where id=$1", match.Player1ID).Scan(&username); err != nil {
+			return Match{}, err
+		}
+		item.Title = "Match invitation"
+		item.Message = username + " invited you to a match. Open it to confirm readiness."
+		if err := notifications.Insert(ctx, tx, match.Player2ID, item); err != nil {
+			return Match{}, err
+		}
+	} else {
+		item.Title = "Opponent found"
+		item.Message = "Open your Arena match to confirm readiness."
+		for _, id := range []uuid.UUID{match.Player1ID, match.Player2ID} {
+			if err := notifications.Insert(ctx, tx, id, item); err != nil {
+				return Match{}, err
+			}
+		}
+	}
+	return created, tx.Commit(ctx)
+}
+
+func createMatchRow(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, match Match) (Match, error) {
+	row := db.QueryRow(
 		ctx,
 		createMatchQuery,
 		match.ID,
@@ -307,12 +349,20 @@ func (r *Repository) EnqueuePlayer(ctx context.Context, input JoinQueueInput) er
 		input.TaskMode = TaskModeNormal
 	}
 
-	_, err := r.db.Exec(ctx, enqueuePlayerQuery, input.UserID, input.RatingMode, input.TaskMode, input.IsRated)
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("enqueue player: %w", err)
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	if err := lockAvailablePlayers(ctx, tx, []uuid.UUID{input.UserID}); err != nil {
+		return fmt.Errorf("enqueue player: %w", err)
+	}
+	_, err = tx.Exec(ctx, enqueuePlayerQuery, input.UserID, input.RatingMode, input.TaskMode, input.IsRated)
 	if err != nil {
 		return fmt.Errorf("enqueue player: %w", err)
 	}
 
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) GetQueuedPlayer(ctx context.Context, userID uuid.UUID) (*QueuedPlayer, error) {
@@ -458,8 +508,6 @@ func (r *Repository) ListMatchReplaySubmissions(ctx context.Context, matchID uui
 			&item.Score,
 			&item.ExitCode,
 			&item.CompileLog,
-			&item.StdoutTruncated,
-			&item.StderrTruncated,
 			&item.CreatedAt,
 			&item.StartedAt,
 			&item.FinishedAt,

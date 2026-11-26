@@ -1,5 +1,7 @@
 package matches
 
+const TournamentReadyInterval = "15 minutes"
+
 const matchSelectColumns = `
 	id,
 	rating_mode,
@@ -60,6 +62,11 @@ const findQueuedOpponentQuery = `
 	  and q.rating_mode = $2
 	  and q.task_mode = $3
 	  and q.is_rated = $4
+	  and not exists (
+		select 1 from matches m
+		where m.status in ('pending', 'running')
+		  and (m.player1_id = q.user_id or m.player2_id = q.user_id)
+	  )
 	  and abs(coalesce(opponent_rating.rating, 1000) - requester.rating) <= least(
 		case
 			when now() - q.created_at < interval '1 minute' then 60
@@ -271,8 +278,6 @@ const listMatchReplaySubmissionsQuery = `
 		score,
 		exit_code,
 		compile_log,
-		stdout_truncated,
-		stderr_truncated,
 		created_at,
 		started_at,
 		finished_at,
@@ -313,7 +318,9 @@ const cancelExpiredPendingMatchesQuery = `
 		select id
 		from matches
 		where status = 'pending'
-		  and created_at <= now() - ($1::text)::interval
+		  and created_at <= now() - case when exists (
+		      select 1 from tournament_fixtures tf where tf.match_id = matches.id
+		  ) then interval '` + TournamentReadyInterval + `' else ($1::text)::interval end
 		order by created_at asc
 		limit $2
 		for update skip locked

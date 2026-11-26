@@ -13,6 +13,7 @@ import (
 	"code-fight-backend/internal/managementhttp"
 	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/metrics"
+	"code-fight-backend/internal/notifications"
 	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
@@ -39,6 +40,7 @@ func New(
 	db *pgxpool.Pool,
 	adminHandler *administration.Handler,
 	tournamentHandler *tournament.Handler,
+	realtimeBroker *realtime.Broker,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: jsonErrorHandler,
@@ -119,6 +121,7 @@ func New(
 	tasksHandler.RegisterRoutes(tasksGroup)
 	leaderboardHandler.RegisterRoutes(tasksGroup)
 	matchesHandler.RegisterPublicRoutes(tasksGroup)
+	tournamentHandler.RegisterPublicRoutes(tasksGroup, authHandler.RequireAuth)
 
 	matchesGroup := protectedGroup(
 		"/api/matches",
@@ -128,7 +131,8 @@ func New(
 	matchesHandler.RegisterRoutes(matchesGroup)
 
 	eventsGroup := protectedGroup("/api/events", authHandler.RequireAuth)
-	realtimeHandler.RegisterRoutes(eventsGroup)
+	realtimeHandler.RegisterRoutes(eventsGroup, authHandler.StreamSessionCheck)
+	notifications.RegisterRoutes(protectedGroup("/api/notifications", authHandler.RequireAuth), notifications.NewStore(db), realtimeBroker)
 
 	adminGroup := protectedGroup("/api/admin", authHandler.RequireAuth, auth.RequireRoles(access.Admin))
 	adminHandler.RegisterRoutes(adminGroup)
