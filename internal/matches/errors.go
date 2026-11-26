@@ -4,6 +4,7 @@ import "errors"
 
 var (
 	ErrMatchNotFound        = errors.New("match not found")
+	ErrPlayerAlreadyInMatch = errors.New("player is already in an active match")
 	ErrSamePlayer           = errors.New("players must be different")
 	ErrInvalidWinner        = errors.New("invalid winner")
 	ErrInvalidPagination    = errors.New("invalid pagination")

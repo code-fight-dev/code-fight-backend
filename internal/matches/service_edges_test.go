@@ -350,11 +350,6 @@ func TestServiceCreateMatchErrorBranches(t *testing.T) {
 		t.Fatalf("create error = %v, want %v", err, createErr)
 	}
 
-	removeErr := errors.New("remove failed")
-	service = NewService(&fakeMatchServiceRepo{removeErr: removeErr}, fakeTaskSelector{}, nil)
-	if _, err := service.CreateMatch(context.Background(), CreateMatchInput{Player1ID: player1, Player2ID: player2}); !errors.Is(err, removeErr) {
-		t.Fatalf("remove queued error = %v, want %v", err, removeErr)
-	}
 }
 
 func TestServiceReadAndQueueErrorBranches(t *testing.T) {

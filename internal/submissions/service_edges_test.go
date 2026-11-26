@@ -50,6 +50,8 @@ func TestCreateTaskSubmissionDependencyErrors(t *testing.T) {
 	taskID := uuid.New()
 	userID := uuid.New()
 	depErr := errors.New("dependency failed")
+	createFailure := submissionRepoFixture()
+	createFailure.createErr = depErr
 	validTask := &fakeTaskRepo{task: &Task{ID: taskID, IsActive: true}, allowed: true}
 	supportedJudge := &fakeJudgeClient{
 		supported:      []judge.SupportedLanguage{{Language: "go", Version: "1.24"}},
@@ -66,7 +68,7 @@ func TestCreateTaskSubmissionDependencyErrors(t *testing.T) {
 		{name: "task get", repo: submissionRepoFixture(), tasks: &fakeTaskRepo{getErr: depErr}, judge: supportedJudge, assert: func(err error) bool { return errors.Is(err, depErr) }},
 		{name: "language allowed", repo: submissionRepoFixture(), tasks: &fakeTaskRepo{task: &Task{ID: taskID, IsActive: true}, allowedErr: depErr}, judge: supportedJudge, assert: func(err error) bool { return errors.Is(err, depErr) }},
 		{name: "judge supported", repo: submissionRepoFixture(), tasks: validTask, judge: &fakeJudgeClient{supportedErr: depErr}, assert: func(err error) bool { return errors.Is(err, ErrJudgeSubmitFailed) }},
-		{name: "create", repo: &fakeCodeRunRepo{createErr: depErr}, tasks: validTask, judge: supportedJudge, assert: func(err error) bool { return errors.Is(err, depErr) }},
+		{name: "create", repo: createFailure, tasks: validTask, judge: supportedJudge, assert: func(err error) bool { return errors.Is(err, depErr) }},
 		{name: "limits", repo: &fakeCodeRunRepo{limitsErr: depErr}, tasks: validTask, judge: supportedJudge, assert: func(err error) bool { return strings.Contains(err.Error(), "get judge task limits") }},
 		{name: "tests", repo: &fakeCodeRunRepo{limits: &JudgeTaskLimits{}, allTestsErr: depErr}, tasks: validTask, judge: supportedJudge, assert: func(err error) bool { return strings.Contains(err.Error(), "list judge task test cases") }},
 		{name: "empty tests", repo: &fakeCodeRunRepo{limits: &JudgeTaskLimits{}}, tasks: validTask, judge: supportedJudge, assert: func(err error) bool { return strings.Contains(err.Error(), "task has no active test cases") }},
@@ -200,6 +202,8 @@ func TestCreateTaskCodeRunDependencyErrors(t *testing.T) {
 	taskID := uuid.New()
 	userID := uuid.New()
 	depErr := errors.New("dependency failed")
+	createFailure := submissionRepoFixture()
+	createFailure.codeRunErr = depErr
 	validTask := &fakeTaskRepo{task: &Task{ID: taskID, IsActive: true}, allowed: true}
 	supportedJudge := &fakeJudgeClient{
 		supported:      []judge.SupportedLanguage{{Language: "go", Version: "1.24"}},
@@ -216,7 +220,7 @@ func TestCreateTaskCodeRunDependencyErrors(t *testing.T) {
 		{name: "task get", repo: submissionRepoFixture(), tasks: &fakeTaskRepo{getErr: depErr}, judge: supportedJudge, assert: func(err error) bool { return errors.Is(err, depErr) }},
 		{name: "language allowed", repo: submissionRepoFixture(), tasks: &fakeTaskRepo{task: &Task{ID: taskID, IsActive: true}, allowedErr: depErr}, judge: supportedJudge, assert: func(err error) bool { return errors.Is(err, depErr) }},
 		{name: "judge supported", repo: submissionRepoFixture(), tasks: validTask, judge: &fakeJudgeClient{supportedErr: depErr}, assert: func(err error) bool { return errors.Is(err, ErrJudgeSubmitFailed) }},
-		{name: "create run", repo: &fakeCodeRunRepo{codeRunErr: depErr}, tasks: validTask, judge: supportedJudge, assert: func(err error) bool { return errors.Is(err, depErr) }},
+		{name: "create run", repo: createFailure, tasks: validTask, judge: supportedJudge, assert: func(err error) bool { return errors.Is(err, depErr) }},
 		{name: "limits", repo: &fakeCodeRunRepo{limitsErr: depErr}, tasks: validTask, judge: supportedJudge, assert: func(err error) bool { return strings.Contains(err.Error(), "get judge task limits") }},
 		{name: "samples", repo: &fakeCodeRunRepo{limits: &JudgeTaskLimits{}, samplesErr: depErr}, tasks: validTask, judge: supportedJudge, assert: func(err error) bool { return strings.Contains(err.Error(), "list judge task sample test cases") }},
 		{name: "judge submit", repo: submissionRepoFixture(), tasks: validTask, judge: &fakeJudgeClient{supported: supportedJudge.supported, submitErr: depErr}, assert: func(err error) bool { return errors.Is(err, ErrJudgeSubmitFailed) }},
