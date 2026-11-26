@@ -688,11 +688,12 @@ func (s *Service) ApplySubmissionResult(ctx context.Context, submissionID uuid.U
 	}
 
 	err = s.repo.FinishMatch(ctx, FinishMatchInput{
-		MatchID:       updatedMatch.ID,
-		WinnerID:      &winnerID,
-		ResultType:    resultType,
-		WinningReason: winningReason,
-		JudgeStatus:   &finalJudgeStatus,
+		MatchID:              updatedMatch.ID,
+		WinnerID:             &winnerID,
+		ResultType:           resultType,
+		WinningReason:        winningReason,
+		JudgeStatus:          &finalJudgeStatus,
+		acceptedSubmissionID: submissionID,
 	})
 	if err != nil {
 		if errors.Is(err, ErrMatchAlreadyFinished) ||

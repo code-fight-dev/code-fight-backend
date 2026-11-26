@@ -16,6 +16,7 @@ import (
 	"code-fight-backend/internal/objectstorage"
 	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
+	"code-fight-backend/internal/tournament"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -231,6 +232,7 @@ func stubRunDependencies(t *testing.T) func() {
 	origNewR2Client := newR2Client
 	origListenHTTPApp := listenHTTPApp
 	origStartNotificationDelivery := startNotificationDelivery
+	origStartTournamentScheduler := startTournamentScheduler
 	origStartJudgeDispatch := startJudgeDispatch
 
 	loadConfig = func() (config.Config, error) {
@@ -241,6 +243,7 @@ func stubRunDependencies(t *testing.T) func() {
 	migrateDatabase = func(context.Context, *pgxpool.Pool) error { return nil }
 	listenHTTPApp = func(*fiber.App, string) error { return nil }
 	startNotificationDelivery = func(context.Context, *pgxpool.Pool, *realtime.Broker, *slog.Logger, string) {}
+	startTournamentScheduler = func(context.Context, *tournament.Service, *slog.Logger) {}
 	startJudgeDispatch = func(context.Context, *submissions.Service, *submissions.PGRepository, time.Duration, *slog.Logger) {}
 
 	return func() {
@@ -252,6 +255,7 @@ func stubRunDependencies(t *testing.T) func() {
 		newR2Client = origNewR2Client
 		listenHTTPApp = origListenHTTPApp
 		startNotificationDelivery = origStartNotificationDelivery
+		startTournamentScheduler = origStartTournamentScheduler
 		startJudgeDispatch = origStartJudgeDispatch
 	}
 }

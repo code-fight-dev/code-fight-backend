@@ -140,12 +140,14 @@ type StartMatchInput struct {
 }
 
 type FinishMatchInput struct {
-	MatchID       uuid.UUID       `json:"match_id"`
-	WinnerID      *uuid.UUID      `json:"winner_id,omitempty"`
-	ResultType    MatchResultType `json:"result_type"`
-	WinningReason WinningReason   `json:"winning_reason"`
-	FinishedAt    *time.Time      `json:"finished_at,omitempty"`
-	JudgeStatus   *JudgeStatus    `json:"judge_status,omitempty"`
+	MatchID              uuid.UUID       `json:"match_id"`
+	WinnerID             *uuid.UUID      `json:"winner_id,omitempty"`
+	ResultType           MatchResultType `json:"result_type"`
+	WinningReason        WinningReason   `json:"winning_reason"`
+	FinishedAt           *time.Time      `json:"finished_at,omitempty"`
+	JudgeStatus          *JudgeStatus    `json:"judge_status,omitempty"`
+	acceptedSubmissionID uuid.UUID
+	expiring             bool
 }
 
 type CancelMatchInput struct {

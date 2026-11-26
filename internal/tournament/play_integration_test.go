@@ -147,6 +147,11 @@ func TestTournamentRoundRobinLifecycle(t *testing.T) {
 		board.Standings[0].Points != 3 || board.Standings[1].Points != 0 {
 		t.Fatalf("final board: %#v, %v", board, err)
 	}
+	participation, err := service.History(ctx, match.Player1ID, 10, "")
+	if err != nil || len(participation.Items) != 1 || participation.Items[0].Points != 3 ||
+		participation.Items[0].Wins != 1 || participation.Items[0].CompletedAt == nil {
+		t.Fatalf("winner participation: %#v, %v", participation, err)
+	}
 	var history int
 	if err := db.QueryRow(ctx, "select count(*) from rating_history where match_id=$1", matchID).Scan(&history); err != nil || history != 0 {
 		t.Fatalf("tournament changed global rating: %d, %v", history, err)

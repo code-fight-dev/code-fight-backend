@@ -183,12 +183,20 @@ const getMatchRatingDeltasQuery = `
 	  and mode = $2
 `
 
+const tournamentEndForMatch = `(select t.ends_at
+	from tournament_fixtures f join tournaments t on t.id=f.tournament_id
+	where f.match_id=matches.id)`
+
+const tournamentReadyDeadlineForMatch = `(select least(matches.created_at + interval '` + TournamentReadyInterval + `', t.ends_at)
+	from tournament_fixtures f join tournaments t on t.id=f.tournament_id
+	where f.match_id=matches.id)`
+
 const acceptMatchQuery = `
 	update matches
 	set player1_ready = $2,
 		player2_ready = $3,
 		updated_at = now()
-	where id = $1
+	where id = $1 and coalesce(` + tournamentReadyDeadlineForMatch + ` > clock_timestamp(), true)
 	returning ` + matchSelectColumns
 
 const startMatchQuery = `
@@ -198,9 +206,9 @@ const startMatchQuery = `
 		player1_ready = true,
 		player2_ready = true,
 		started_at = now(),
-		expires_at = now() + ($4::text)::interval,
+		expires_at = least(now() + ($4::text)::interval, ` + tournamentEndForMatch + `),
 		updated_at = now()
-	where id = $1
+	where id = $1 and coalesce(` + tournamentReadyDeadlineForMatch + ` > clock_timestamp(), true)
 	returning ` + matchSelectColumns
 
 const cancelMatchQuery = `
@@ -309,6 +317,8 @@ const listExpiredMatchesQuery = `
 	where status = 'running'
 	  and expires_at is not null
 	  and expires_at <= $1
+	  and coalesce(` + tournamentEndForMatch + ` > $1, true)
+	  and (` + tournamentEndForMatch + ` is null or not tournament_match_waits_for_judge(id, expires_at))
 	order by expires_at asc
 	limit $2
 `
@@ -318,9 +328,7 @@ const cancelExpiredPendingMatchesQuery = `
 		select id
 		from matches
 		where status = 'pending'
-		  and created_at <= now() - case when exists (
-		      select 1 from tournament_fixtures tf where tf.match_id = matches.id
-		  ) then interval '` + TournamentReadyInterval + `' else ($1::text)::interval end
+		  and coalesce(` + tournamentReadyDeadlineForMatch + `, created_at + ($1::text)::interval) <= now()
 		order by created_at asc
 		limit $2
 		for update skip locked
@@ -345,7 +353,15 @@ const finishMatchQuery = `
 		judge_status = $6,
 		finished_at = $7,
 		updated_at = now()
-	where id = $1
+	where id = $1 and (
+		` + tournamentEndForMatch + ` is null
+		or (` + tournamentEndForMatch + ` > clock_timestamp()
+			and $8 = '00000000-0000-0000-0000-000000000000'::uuid
+			and (not $9 or not tournament_match_waits_for_judge(id, expires_at)))
+		or exists (select 1 from submissions s where s.id=$8 and s.match_id=matches.id and s.user_id=$2
+			and s.status='finished' and s.verdict='accepted'
+			and s.created_at < least(matches.expires_at, ` + tournamentEndForMatch + `))
+	)
 `
 
 const markMatchRatingAppliedQuery = `

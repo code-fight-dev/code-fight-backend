@@ -27,16 +27,18 @@ type Service struct{ db database }
 func NewService(db database) *Service { return &Service{db: db} }
 
 type Draft struct {
-	ID            uuid.UUID `json:"id"`
-	Slug          string    `json:"slug"`
-	Title         string    `json:"title"`
-	Description   string    `json:"description"`
-	OwnerID       uuid.UUID `json:"ownerId"`
-	CreatedBy     uuid.UUID `json:"createdBy"`
-	Status        string    `json:"status"`
-	ConfigVersion int64     `json:"configVersion"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	Schedule
+	ID            uuid.UUID  `json:"id"`
+	Slug          string     `json:"slug"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description"`
+	OwnerID       uuid.UUID  `json:"ownerId"`
+	CreatedBy     uuid.UUID  `json:"createdBy"`
+	Status        string     `json:"status"`
+	ConfigVersion int64      `json:"configVersion"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+	CompletedAt   *time.Time `json:"completedAt"`
 }
 
 type CreateInput struct {
@@ -62,15 +64,19 @@ type cursor struct {
 var ErrSlugTaken = errors.New("tournament slug already exists")
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-const columns = `id, slug, title, description, owner_id, created_by, status, config_version, created_at, updated_at`
+const columns = `id, slug, title, description, owner_id, created_by, status, config_version, created_at, updated_at,
+	registration_closes_at, starts_at, ends_at, completed_at`
 
 func scanDraft(row interface{ Scan(...any) error }) (Draft, error) {
 	var draft Draft
 	err := row.Scan(&draft.ID, &draft.Slug, &draft.Title, &draft.Description, &draft.OwnerID,
-		&draft.CreatedBy, &draft.Status, &draft.ConfigVersion, &draft.CreatedAt, &draft.UpdatedAt)
+		&draft.CreatedBy, &draft.Status, &draft.ConfigVersion, &draft.CreatedAt, &draft.UpdatedAt,
+		&draft.RegistrationClosesAt, &draft.StartsAt, &draft.EndsAt, &draft.CompletedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Draft{}, access.ErrNotFound
 	}
+	draft.Schedule = draft.Schedule.utc()
+	draft.CompletedAt = utcTime(draft.CompletedAt)
 	return draft, mapError(err)
 }
 
@@ -156,16 +162,12 @@ func (s *Service) GetDraft(ctx context.Context, actorID, id uuid.UUID) (Draft, e
 }
 
 func (s *Service) ListDrafts(ctx context.Context, actorID uuid.UUID, limit int, rawCursor string) (Page, error) {
-	if limit < 1 || limit > 100 || len(rawCursor) > 256 {
+	after, err := decodeCursor(limit, rawCursor)
+	if err != nil {
 		return Page{}, access.ErrInvalidInput
 	}
 	var before *time.Time
-	var after cursor
-	if rawCursor != "" {
-		data, err := base64.RawURLEncoding.DecodeString(rawCursor)
-		if err != nil || json.Unmarshal(data, &after) != nil || after.ID == uuid.Nil || after.CreatedAt.IsZero() {
-			return Page{}, access.ErrInvalidInput
-		}
+	if !after.CreatedAt.IsZero() {
 		before = &after.CreatedAt
 	}
 	ctx, tx, cleanup, err := managementtx.Begin(ctx, s.db)
@@ -209,6 +211,20 @@ func (s *Service) ListDrafts(ctx context.Context, actorID uuid.UUID, limit int, 
 		page.NextCursor = base64.RawURLEncoding.EncodeToString(data)
 	}
 	return page, tx.Commit(ctx)
+}
+
+func decodeCursor(limit int, rawCursor string) (cursor, error) {
+	var after cursor
+	if limit < 1 || limit > 100 || len(rawCursor) > 256 {
+		return after, access.ErrInvalidInput
+	}
+	if rawCursor != "" {
+		data, err := base64.RawURLEncoding.DecodeString(rawCursor)
+		if err != nil || json.Unmarshal(data, &after) != nil || after.ID == uuid.Nil || after.CreatedAt.IsZero() {
+			return cursor{}, access.ErrInvalidInput
+		}
+	}
+	return after, nil
 }
 
 func (s *Service) UpdateDraft(ctx context.Context, actorID, id uuid.UUID, input UpdateInput, requestID string) (Draft, error) {
