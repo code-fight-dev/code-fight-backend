@@ -31,12 +31,15 @@ type Summary struct {
 }
 
 type Standing struct {
-	UserID   uuid.UUID `json:"userId"`
-	Username string    `json:"username"`
-	Played   int       `json:"played"`
-	Wins     int       `json:"wins"`
-	Draws    int       `json:"draws"`
-	Points   int       `json:"points"`
+	UserID              uuid.UUID `json:"userId"`
+	Username            string    `json:"username"`
+	Played              int       `json:"played"`
+	Wins                int       `json:"wins"`
+	Draws               int       `json:"draws"`
+	Points              int       `json:"points"`
+	Rank                int       `json:"rank"`
+	ContestRatingBefore *int      `json:"contestRatingBefore"`
+	ContestRatingAfter  *int      `json:"contestRatingAfter"`
 }
 
 type Fixture struct {
@@ -64,6 +67,21 @@ type TransitionInput struct {
 
 const summaryColumns = `id, slug, title, description, status, task_id, owner_id, config_version,
 	registration_closes_at, starts_at, ends_at, completed_at`
+
+const contestStandingsSQL = `with standings as (
+select p.user_id, u.username, count(m.id) as played,
+       count(*) filter (where m.winner_id=p.user_id) as wins,
+       count(*) filter (where m.result_type='draw') as draws,
+       3 * count(*) filter (where m.winner_id=p.user_id) +
+           count(*) filter (where m.result_type='draw') as points
+from tournament_participants p
+join users u on u.id=p.user_id
+left join tournament_fixtures f on f.tournament_id=p.tournament_id
+    and p.user_id in (f.player1_id, f.player2_id)
+left join matches m on m.id=f.match_id and m.status='finished'
+where p.tournament_id=$1
+group by p.user_id,u.username
+)`
 
 func scanSummary(row interface{ Scan(...any) error }) (Summary, error) {
 	var summary Summary
@@ -140,20 +158,11 @@ order by p1.username, p2.username, f.id`, id)
 	for index := range fixtureItems {
 		fixtureItems[index].ReadyDeadlineAt = utcTime(fixtureItems[index].ReadyDeadlineAt)
 	}
-	standings, err := tx.Query(ctx, `
-select p.user_id, u.username, count(m.id) as played,
-       count(*) filter (where m.winner_id=p.user_id) as wins,
-       count(*) filter (where m.result_type='draw') as draws,
-       3 * count(*) filter (where m.winner_id=p.user_id) +
-           count(*) filter (where m.result_type='draw') as points
-from tournament_participants p
-join users u on u.id=p.user_id
-left join tournament_fixtures f on f.tournament_id=p.tournament_id
-    and p.user_id in (f.player1_id, f.player2_id)
-left join matches m on m.id=f.match_id and m.status='finished'
-where p.tournament_id=$1
-group by p.user_id,u.username
-order by points desc, wins desc, u.username, p.user_id`, id)
+	standings, err := tx.Query(ctx, contestStandingsSQL+`
+select s.*, dense_rank() over (order by s.points desc, s.wins desc) as rank,
+       c.rating_before as contest_rating_before, c.rating_after as contest_rating_after
+from standings s left join contest_rating_changes c on c.tournament_id=$1 and c.user_id=s.user_id
+order by rank, s.username, s.user_id`, id)
 	if err != nil {
 		return Board{}, err
 	}

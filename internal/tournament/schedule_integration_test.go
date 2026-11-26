@@ -108,7 +108,8 @@ func TestScheduledTournamentWaitsForPreDeadlineVerdict(t *testing.T) {
 	}
 	board, err = service.Board(ctx, draft.ID)
 	if err != nil || board.Tournament.Status != "completed" || len(board.Standings) != 2 ||
-		board.Standings[0].UserID != player || board.Standings[0].Points != 3 {
+		board.Standings[0].UserID != player || board.Standings[0].Points != 3 ||
+		board.Standings[0].ContestRatingAfter == nil || *board.Standings[0].ContestRatingAfter != 1016 {
 		t.Fatalf("late verdict missing from the final standings: %#v, %v", board, err)
 	}
 }

@@ -147,6 +147,32 @@ func TestTournamentRoundRobinLifecycle(t *testing.T) {
 		board.Standings[0].Points != 3 || board.Standings[1].Points != 0 {
 		t.Fatalf("final board: %#v, %v", board, err)
 	}
+	for i, want := range []int{1016, 984} {
+		standing := board.Standings[i]
+		if standing.Rank != i+1 || standing.ContestRatingBefore == nil || *standing.ContestRatingBefore != 1000 ||
+			standing.ContestRatingAfter == nil || *standing.ContestRatingAfter != want {
+			t.Fatalf("rating for standing %d = %#v, want %d", i, standing, want)
+		}
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err := applyContestRating(ctx, tx, draft.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var rating int
+	if err := db.QueryRow(ctx, `select rating from contest_ratings where user_id=$1`, match.Player1ID).Scan(&rating); err != nil || rating != 1016 {
+		t.Fatalf("replayed event changed rating to %d: %v", rating, err)
+	}
+	var duelRatings int
+	if err := db.QueryRow(ctx, `select count(*) from rating_history where match_id=$1`, match.ID).Scan(&duelRatings); err != nil || duelRatings != 0 {
+		t.Fatalf("contest updated duel rating history: %d, %v", duelRatings, err)
+	}
 	participation, err := service.History(ctx, match.Player1ID, 10, "")
 	if err != nil || len(participation.Items) != 1 || participation.Items[0].Points != 3 ||
 		participation.Items[0].Wins != 1 || participation.Items[0].CompletedAt == nil {
