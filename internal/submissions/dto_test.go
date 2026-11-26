@@ -1,6 +1,8 @@
 package submissions
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -14,8 +16,10 @@ func TestToSubmissionResponse(t *testing.T) {
 	judgeStatus := JudgeStatusFinished
 	timeMs := 12
 
+	secret := "private-test-output"
 	resp := ToSubmissionResponse(&Submission{
-		ID:                "submission-1",
+		ID:              "submission-1",
+		StdoutTruncated: &secret, StderrTruncated: &secret,
 		MatchID:           &matchID,
 		TaskID:            "task-1",
 		UserID:            "user-1",
@@ -36,6 +40,10 @@ func TestToSubmissionResponse(t *testing.T) {
 		{TestCaseID: "case-1", Status: VerdictAccepted, TimeMs: &timeMs},
 	})
 
+	wire, err := json.Marshal(resp)
+	if err != nil || bytes.Contains(wire, []byte(secret)) {
+		t.Fatal("exposed hidden test output or invalid response", err)
+	}
 	if resp.ID != "submission-1" || resp.MatchID == nil || *resp.MatchID != "match-1" {
 		t.Fatalf("response identity = %#v", resp)
 	}
@@ -54,9 +62,11 @@ func TestToCodeRunResponse(t *testing.T) {
 	judgeID := "judge-run-1"
 	judgeStatus := JudgeStatusFinished
 	testName := "Custom test"
+	output := "sample output"
 
 	resp := ToCodeRunResponse(&CodeRun{
 		ID:                "run-1",
+		StdoutTruncated:   &output,
 		TaskID:            "task-1",
 		UserID:            "user-1",
 		Language:          "go",
@@ -76,6 +86,9 @@ func TestToCodeRunResponse(t *testing.T) {
 		{TestName: &testName, IsCustom: true, Status: VerdictAccepted},
 	})
 
+	if resp.StdoutTruncated == nil || *resp.StdoutTruncated != output {
+		t.Fatal("missing sample output")
+	}
 	if resp.ID != "run-1" || resp.TaskID != "task-1" {
 		t.Fatalf("response identity = %#v", resp)
 	}
