@@ -609,6 +609,7 @@ func (r *Repository) finishExpiredMatch(ctx context.Context, matchID uuid.UUID, 
 		WinningReason: WinningReasonDraw,
 		FinishedAt:    &now,
 		JudgeStatus:   ptrJudgeStatus(JudgeStatusFinished),
+		expiring:      true,
 	}
 
 	if match.Player1Score > match.Player2Score {
@@ -688,6 +689,8 @@ func (r *Repository) FinishMatch(ctx context.Context, input FinishMatchInput) er
 		input.WinningReason,
 		judgeStatus,
 		finishedAt,
+		input.acceptedSubmissionID,
+		input.expiring,
 	)
 	if err != nil {
 		return fmt.Errorf("update match result: %w", err)
@@ -1003,7 +1006,10 @@ func (r *Repository) ApplySubmissionProgress(ctx context.Context, input ApplySub
 
 	claimed, err := tx.Exec(ctx, `update submissions set match_progress_applied_at = now()
 		where id = $1 and match_id = $2 and user_id = $3 and status in ('finished', 'failed')
-		  and match_progress_applied_at is null`, input.SubmissionID, input.MatchID, input.UserID)
+		  and match_progress_applied_at is null
+		  and not exists (select 1 from tournament_fixtures f join tournaments t on t.id=f.tournament_id
+		      join matches m on m.id=f.match_id where m.id=$2 and t.ends_at is not null
+		      and submissions.created_at >= least(m.expires_at, t.ends_at))`, input.SubmissionID, input.MatchID, input.UserID)
 	if err != nil || claimed.RowsAffected() == 0 {
 		return false, err
 	}

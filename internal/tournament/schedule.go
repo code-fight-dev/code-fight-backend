@@ -98,7 +98,7 @@ func (s *Service) advanceSchedule(ctx context.Context) (bool, error) {
 		where t.starts_at is not null and (
 			(t.status='published' and t.starts_at <= clock_timestamp())
 			or (t.status='running' and (
-				t.ends_at <= clock_timestamp()
+				(t.ends_at <= clock_timestamp() and not `+tournamentHasPendingSubmissions+`)
 				or not exists (
 					select 1 from tournament_fixtures f left join matches m on m.id=f.match_id
 					where f.tournament_id=t.id and m.status is distinct from 'finished'
@@ -116,6 +116,19 @@ func (s *Service) advanceSchedule(ctx context.Context) (bool, error) {
 	reason := "all_fixtures_finished"
 	if deadlinePassed {
 		reason = "deadline_passed"
+		// Match submission admission takes the same row lock. Recheck after
+		// waiting for any submission that was committing as the deadline passed.
+		if _, err := tx.Exec(ctx, `select m.id from tournament_fixtures f join matches m on m.id=f.match_id
+			where f.tournament_id=$1 and m.status in ('pending','running') order by m.id for update of m`, id); err != nil {
+			return false, err
+		}
+		var pending bool
+		if err := tx.QueryRow(ctx, `select `+tournamentHasPendingSubmissions+` from tournaments t where t.id=$1`, id).Scan(&pending); err != nil {
+			return false, err
+		}
+		if pending {
+			return false, nil
+		}
 		if _, err := tx.Exec(ctx, `update matches m set status='cancelled', result_type='cancelled',
 			winning_reason='cancelled', judge_status='failed', finished_at=clock_timestamp(), updated_at=clock_timestamp()
 			from tournament_fixtures f where f.match_id=m.id and f.tournament_id=$1
@@ -145,3 +158,9 @@ func (s *Service) advanceSchedule(ctx context.Context) (bool, error) {
 	}
 	return true, tx.Commit(ctx)
 }
+
+const tournamentHasPendingSubmissions = `exists (
+	select 1 from tournament_fixtures f join matches m on m.id=f.match_id
+	where f.tournament_id=t.id and m.status='running'
+	and tournament_match_waits_for_judge(m.id, least(m.expires_at, t.ends_at))
+)`

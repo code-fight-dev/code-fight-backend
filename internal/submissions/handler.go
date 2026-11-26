@@ -185,6 +185,7 @@ func mapServiceError(err error) error {
 	case errors.Is(err, ErrTaskInactive),
 		errors.Is(err, ErrTaskLanguageNotAllowed),
 		errors.Is(err, ErrMatchNotStarted),
+		errors.Is(err, ErrMatchSubmissionDeadlinePassed),
 		errors.Is(err, ErrMatchTaskNotAssigned),
 		errors.Is(err, ErrUserNotMatchParticipant),
 		errors.Is(err, ErrInvalidSourceCode):

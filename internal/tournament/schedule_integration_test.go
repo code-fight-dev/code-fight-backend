@@ -6,11 +6,112 @@ import (
 	"time"
 
 	"code-fight-backend/internal/access"
+	"code-fight-backend/internal/judge"
 	"code-fight-backend/internal/matches"
+	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/testsupport"
 
 	"github.com/google/uuid"
 )
+
+func TestScheduledTournamentWaitsForPreDeadlineVerdict(t *testing.T) {
+	db, ctx := testsupport.RequirePostgres(t)
+	service := NewService(db)
+	organizer := createTournamentPlayer(t, db, ctx, access.Organizer)
+	player := createTournamentPlayer(t, db, ctx, access.User)
+	opponent := createTournamentPlayer(t, db, ctx, access.User)
+	draft, err := service.CreateDraft(ctx, organizer, CreateInput{Slug: "settle-" + uuid.NewString(), Title: "Settlement cup"}, "settlement-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var matchID uuid.UUID
+	t.Cleanup(func() {
+		_, _ = db.Exec(ctx, "delete from submissions where match_id=$1", matchID)
+		_, _ = db.Exec(ctx, "delete from tournaments where id=$1", draft.ID)
+		_, _ = db.Exec(ctx, "delete from matches where id=$1", matchID)
+	})
+	now := time.Now().UTC()
+	closes, starts, ends := now.Add(time.Minute), now.Add(2*time.Minute), now.Add(5*time.Minute)
+	if err := service.Transition(ctx, organizer, draft.ID, TransitionInput{
+		Status: "published", TaskSlug: "signal-stabilizer", ExpectedConfigVersion: 1,
+		Schedule: Schedule{RegistrationClosesAt: &closes, StartsAt: &starts, EndsAt: &ends},
+	}, "settlement-test"); err != nil {
+		t.Fatal(err)
+	}
+	for _, participant := range []uuid.UUID{player, opponent} {
+		if err := service.Join(ctx, participant, draft.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(ctx, `update tournaments set registration_closes_at=now()-interval '20 seconds',
+		starts_at=now()-interval '10 seconds' where id=$1`, draft.ID); err != nil {
+		t.Fatal(err)
+	}
+	if advanced, err := service.advanceSchedule(ctx); !advanced || err != nil {
+		t.Fatalf("start tournament: %v, %v", advanced, err)
+	}
+	board, err := service.Board(ctx, draft.ID)
+	if err != nil || len(board.Fixtures) != 1 {
+		t.Fatalf("scheduled board: %#v, %v", board, err)
+	}
+	matchID, err = service.ScheduleFixture(ctx, organizer, draft.ID, board.Fixtures[0].ID, "settlement-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchRepo := matches.NewRepository(db)
+	for _, participant := range []uuid.UUID{player, opponent} {
+		if _, err := matchRepo.StartMatch(ctx, matchID, participant, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	subRepo := submissions.NewPGRepository(db)
+	matchIDString := matchID.String()
+	accepted := submissions.Submission{
+		ID: uuid.NewString(), MatchID: &matchIDString, TaskID: board.Tournament.TaskID.String(),
+		UserID: player.String(), Status: submissions.StatusQueued, SourceCode: "package main",
+		Language: "go", LanguageVersion: "1.24", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := subRepo.Create(ctx, &accepted); err != nil {
+		t.Fatal(err)
+	}
+	var realDeadline time.Time
+	if err := db.QueryRow(ctx, `update tournaments set ends_at=clock_timestamp()-interval '1 second'
+		where id=$1 returning ends_at`, draft.ID).Scan(&realDeadline); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "update submissions set created_at=$2 where id=$1", accepted.ID, realDeadline.Add(-time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if advanced, err := service.advanceSchedule(ctx); advanced || err != nil {
+		t.Fatalf("unfinished eligible submission must defer finalization: %v, %v", advanced, err)
+	}
+	late := accepted
+	late.ID = uuid.NewString()
+	late.CreatedAt = time.Now().UTC()
+	if err := subRepo.Create(ctx, &late); !errors.Is(err, submissions.ErrMatchSubmissionDeadlinePassed) {
+		t.Fatalf("late submission admitted: %v", err)
+	}
+	judgeID := uuid.NewString()
+	verdict := submissions.VerdictAccepted
+	started := realDeadline.Add(time.Millisecond)
+	finished := time.Now().UTC()
+	matchService := matches.NewService(matchRepo, nil, submissions.NewMatchReader(subRepo))
+	callbacks := submissions.NewService(subRepo, nil, nil, nil, matchService, "", "", 0, nil)
+	if err := callbacks.HandleJudgeCallback(ctx, judge.CallbackPayload{
+		SubmissionID: accepted.ID, JudgeSubmissionID: judgeID, JudgeStatus: submissions.JudgeStatusFinished,
+		Verdict: &verdict, StartedAt: &started, FinishedAt: &finished,
+	}); err != nil {
+		t.Fatalf("apply the delayed Judge verdict: %v", err)
+	}
+	if advanced, err := service.advanceSchedule(ctx); !advanced || err != nil {
+		t.Fatalf("complete after verdict: %v, %v", advanced, err)
+	}
+	board, err = service.Board(ctx, draft.ID)
+	if err != nil || board.Tournament.Status != "completed" || len(board.Standings) != 2 ||
+		board.Standings[0].UserID != player || board.Standings[0].Points != 3 {
+		t.Fatalf("late verdict missing from the final standings: %#v, %v", board, err)
+	}
+}
 
 func TestScheduledTournamentRegistrationAndExpiry(t *testing.T) {
 	db, ctx := testsupport.RequirePostgres(t)

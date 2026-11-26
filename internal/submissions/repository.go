@@ -104,7 +104,7 @@ insert into submissions (
     $23, $24, $25, $26
 )`
 
-	return r.createWithJudgeCapacity(ctx, s.UserID, s.Status, dispatch, false, q,
+	return r.createWithJudgeCapacity(ctx, s.UserID, s.Status, s.MatchID, dispatch, false, q,
 		s.ID, s.MatchID, s.TaskID, s.UserID, s.Language, s.LanguageVersion, s.SourceCode,
 		s.Status, s.Verdict, s.JudgeSubmissionID, s.JudgeStatus, s.ErrorMessage,
 		s.PassedTests, s.TotalTests, s.CompileTimeMs, s.RunTimeMs, s.PeakMemoryKb,
@@ -133,7 +133,7 @@ insert into code_runs (
     $22, $23, $24, $25
 )`
 
-	return r.createWithJudgeCapacity(ctx, run.UserID, run.Status, dispatch, true, q,
+	return r.createWithJudgeCapacity(ctx, run.UserID, run.Status, nil, dispatch, true, q,
 		run.ID, run.TaskID, run.UserID, run.Language, run.LanguageVersion, run.SourceCode,
 		run.Status, run.Verdict, run.JudgeSubmissionID, run.JudgeStatus, run.ErrorMessage,
 		run.PassedTests, run.TotalTests, run.CompileTimeMs, run.RunTimeMs, run.PeakMemoryKb,
@@ -142,7 +142,7 @@ insert into code_runs (
 	)
 }
 
-func (r *PGRepository) createWithJudgeCapacity(ctx context.Context, userID, status string, dispatch []byte, codeRun bool, query string, args ...any) error {
+func (r *PGRepository) createWithJudgeCapacity(ctx context.Context, userID, status string, matchID *string, dispatch []byte, codeRun bool, query string, args ...any) error {
 	if status != StatusQueued {
 		_, err := r.db.Exec(ctx, query, args...)
 		return err
@@ -179,6 +179,11 @@ select count(*) from (
 	if count >= maxActiveJudgeJobsPerUser {
 		return ErrJudgeActiveLimit
 	}
+	if matchID != nil {
+		if err := requireOpenMatchForSubmission(ctx, tx, *matchID); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(ctx, query, args...); err != nil {
 		return err
 	}
@@ -189,6 +194,36 @@ select count(*) from (
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func requireOpenMatchForSubmission(ctx context.Context, tx pgx.Tx, matchID string) error {
+	var status string
+	var cutoff *time.Time
+	// A scheduler finalizing a tournament takes the same match lock before it
+	// checks for outstanding submissions. It cannot miss an admission in flight.
+	err := tx.QueryRow(ctx, `select m.status,
+			case when t.ends_at is not null then least(m.expires_at, t.ends_at) end
+		from matches m left join tournament_fixtures f on f.match_id=m.id
+		left join tournaments t on t.id=f.tournament_id where m.id=$1 for update of m`, matchID).Scan(&status, &cutoff)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrMatchNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if status != "running" {
+		return ErrMatchNotStarted
+	}
+	if cutoff != nil {
+		var open bool
+		if err := tx.QueryRow(ctx, `select $1::timestamptz > clock_timestamp()`, cutoff).Scan(&open); err != nil {
+			return err
+		}
+		if !open {
+			return ErrMatchSubmissionDeadlinePassed
+		}
+	}
+	return nil
 }
 
 func (r *PGRepository) GetByID(ctx context.Context, id string) (*Submission, []SubmissionTestResult, error) {

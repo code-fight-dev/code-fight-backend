@@ -320,6 +320,7 @@ const listExpiredMatchesQuery = `
 	  and expires_at is not null
 	  and expires_at <= $1
 	  and coalesce(` + tournamentEndForMatch + ` > $1, true)
+	  and (` + tournamentEndForMatch + ` is null or not tournament_match_waits_for_judge(id, expires_at))
 	order by expires_at asc
 	limit $2
 `
@@ -354,7 +355,15 @@ const finishMatchQuery = `
 		judge_status = $6,
 		finished_at = $7,
 		updated_at = now()
-	where id = $1 and coalesce(` + tournamentEndForMatch + ` > clock_timestamp(), true)
+	where id = $1 and (
+		` + tournamentEndForMatch + ` is null
+		or (` + tournamentEndForMatch + ` > clock_timestamp()
+			and $8 = '00000000-0000-0000-0000-000000000000'::uuid
+			and (not $9 or not tournament_match_waits_for_judge(id, expires_at)))
+		or exists (select 1 from submissions s where s.id=$8 and s.match_id=matches.id and s.user_id=$2
+			and s.status='finished' and s.verdict='accepted'
+			and s.created_at < least(matches.expires_at, ` + tournamentEndForMatch + `))
+	)
 `
 
 const markMatchRatingAppliedQuery = `
