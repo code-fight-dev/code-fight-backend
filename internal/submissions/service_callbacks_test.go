@@ -241,7 +241,7 @@ func TestHandleJudgeCallbackRunningFailedAndAlreadyFinal(t *testing.T) {
 	}
 }
 
-func TestHandleJudgeCallbackMatchApplierError(t *testing.T) {
+func TestHandleJudgeCallbackRetriesMatchApplierAfterTerminalWrite(t *testing.T) {
 	matchID := uuid.New()
 	subID := uuid.NewString()
 	repo := submissionRepoFixture()
@@ -255,16 +255,32 @@ func TestHandleJudgeCallbackMatchApplierError(t *testing.T) {
 		JudgeSubmissionID: ptrString("judge-match-sub"),
 	}}
 	applierErr := errors.New("apply failed")
-	service := NewService(repo, nil, nil, nil, fakeMatchApplier{err: applierErr}, "", "", 1024, nil)
+	applier := &fakeMatchApplier{err: applierErr}
+	service := NewService(repo, nil, nil, nil, applier, "", "", 1024, nil)
 
-	err := service.HandleJudgeCallback(context.Background(), judge.CallbackPayload{
+	startedAt := time.Now().UTC().Truncate(time.Microsecond)
+	payload := judge.CallbackPayload{
 		JudgeSubmissionID: "judge-match-sub",
 		SubmissionID:      subID,
 		JudgeStatus:       JudgeStatusFailed,
+		StartedAt:         &startedAt,
 		Tests:             []judge.CallbackTestResult{{TestCaseID: "case-1", Status: VerdictRuntimeError}},
-	})
+	}
+	err := service.HandleJudgeCallback(context.Background(), payload)
 	if err == nil || !errors.Is(err, applierErr) {
 		t.Fatalf("match applier error = %v, want %v", err, applierErr)
+	}
+	if repo.submissions[subID].Status != StatusFailed {
+		t.Fatal("terminal submission missing after match applier failed")
+	}
+	applier.err = nil
+	if err := service.HandleJudgeCallback(context.Background(), payload); err != nil || applier.calls != 2 {
+		t.Fatalf("replay = %v, applier calls = %d", err, applier.calls)
+	}
+	older := startedAt.Add(-time.Second)
+	payload.StartedAt = &older
+	if err := service.HandleJudgeCallback(context.Background(), payload); err != nil || applier.calls != 2 {
+		t.Fatalf("stale attempt = %v, applier calls = %d", err, applier.calls)
 	}
 }
 
@@ -298,10 +314,12 @@ func TestHandleCodeRunJudgeCallbackFailedAndAlreadyFinal(t *testing.T) {
 }
 
 type fakeMatchApplier struct {
-	err error
+	err   error
+	calls int
 }
 
-func (a fakeMatchApplier) ApplySubmissionResult(context.Context, uuid.UUID) error {
+func (a *fakeMatchApplier) ApplySubmissionResult(context.Context, uuid.UUID) error {
+	a.calls++
 	return a.err
 }
 

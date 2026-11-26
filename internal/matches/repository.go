@@ -955,44 +955,52 @@ func isForeignKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
-func (r *Repository) ApplySubmissionProgress(ctx context.Context, input ApplySubmissionProgressInput) error {
+func (r *Repository) ApplySubmissionProgress(ctx context.Context, input ApplySubmissionProgressInput) (bool, error) {
 	if input.MatchID == uuid.Nil {
-		return fmt.Errorf("apply submission progress: empty match id")
+		return false, fmt.Errorf("apply submission progress: empty match id")
 	}
 	if input.UserID == uuid.Nil {
-		return fmt.Errorf("apply submission progress: empty user id")
+		return false, fmt.Errorf("apply submission progress: empty user id")
 	}
-
-	match, err := r.GetMatch(ctx, input.MatchID)
+	if input.SubmissionID == uuid.Nil {
+		return false, fmt.Errorf("apply submission progress: empty submission id")
+	}
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
+		return false, err
 	}
-
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	match, err := scanMatch(tx.QueryRow(ctx, getMatchForUpdateQuery, input.MatchID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrMatchNotFound
+	}
+	if err != nil {
+		return false, err
+	}
 	if match.Status == MatchStatusFinished || match.Status == MatchStatusCancelled {
-		return nil
+		return false, nil
+	}
+	var query string
+	switch input.UserID {
+	case match.Player1ID:
+		query = applyPlayer1SubmissionProgressQuery
+	case match.Player2ID:
+		query = applyPlayer2SubmissionProgressQuery
+	default:
+		return false, ErrSubmissionUserNotInMatch
 	}
 
-	if input.UserID == match.Player1ID {
-		_, err := r.db.Exec(ctx, applyPlayer1SubmissionProgressQuery,
-			input.MatchID,
-			input.Score,
-			input.IsAccepted,
-			input.SolvedAt,
-			input.JudgeStatus,
-		)
-		return err
+	claimed, err := tx.Exec(ctx, `update submissions set match_progress_applied_at = now()
+		where id = $1 and match_id = $2 and user_id = $3 and status in ('finished', 'failed')
+		  and match_progress_applied_at is null`, input.SubmissionID, input.MatchID, input.UserID)
+	if err != nil || claimed.RowsAffected() == 0 {
+		return false, err
 	}
-
-	if input.UserID == match.Player2ID {
-		_, err := r.db.Exec(ctx, applyPlayer2SubmissionProgressQuery,
-			input.MatchID,
-			input.Score,
-			input.IsAccepted,
-			input.SolvedAt,
-			input.JudgeStatus,
-		)
-		return err
+	if _, err := tx.Exec(ctx, query, input.MatchID, input.Score, input.IsAccepted, input.SolvedAt, input.JudgeStatus); err != nil {
+		return false, err
 	}
-
-	return ErrSubmissionUserNotInMatch
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }

@@ -379,23 +379,26 @@ func TestRepositoryApplySubmissionProgressValidationAndParticipants(t *testing.T
 		UpdatedAt:   now,
 	})
 
-	repo := &Repository{db: &fakeMatchDB{
+	repo := &Repository{db: &fakeMatchDB{tx: &fakeMatchTx{
 		rowResults: []*fakePGRow{{values: matchValues}, {values: matchValues}, {values: matchValues}},
-		execTags:   []pgconn.CommandTag{pgconn.NewCommandTag("UPDATE 1"), pgconn.NewCommandTag("UPDATE 1")},
-	}}
-	if err := repo.ApplySubmissionProgress(context.Background(), ApplySubmissionProgressInput{}); err == nil {
+		execTags: []pgconn.CommandTag{
+			pgconn.NewCommandTag("UPDATE 1"), pgconn.NewCommandTag("UPDATE 1"),
+			pgconn.NewCommandTag("UPDATE 1"), pgconn.NewCommandTag("UPDATE 1"),
+		},
+	}}}
+	if _, err := repo.ApplySubmissionProgress(context.Background(), ApplySubmissionProgressInput{}); err == nil {
 		t.Fatal("empty input returned nil error")
 	}
-	if err := repo.ApplySubmissionProgress(context.Background(), ApplySubmissionProgressInput{MatchID: matchID}); err == nil {
+	if _, err := repo.ApplySubmissionProgress(context.Background(), ApplySubmissionProgressInput{MatchID: matchID}); err == nil {
 		t.Fatal("empty user returned nil error")
 	}
-	if err := repo.ApplySubmissionProgress(context.Background(), ApplySubmissionProgressInput{MatchID: matchID, UserID: player1, Score: 10}); err != nil {
-		t.Fatalf("player1 progress returned error: %v", err)
+	if applied, err := repo.ApplySubmissionProgress(context.Background(), ApplySubmissionProgressInput{SubmissionID: uuid.New(), MatchID: matchID, UserID: player1, Score: 10}); err != nil || !applied {
+		t.Fatalf("player1 progress = %v, %v", applied, err)
 	}
-	if err := repo.ApplySubmissionProgress(context.Background(), ApplySubmissionProgressInput{MatchID: matchID, UserID: player2, Score: 10}); err != nil {
-		t.Fatalf("player2 progress returned error: %v", err)
+	if applied, err := repo.ApplySubmissionProgress(context.Background(), ApplySubmissionProgressInput{SubmissionID: uuid.New(), MatchID: matchID, UserID: player2, Score: 10}); err != nil || !applied {
+		t.Fatalf("player2 progress = %v, %v", applied, err)
 	}
-	if err := repo.ApplySubmissionProgress(context.Background(), ApplySubmissionProgressInput{MatchID: matchID, UserID: uuid.New()}); !errors.Is(err, ErrSubmissionUserNotInMatch) {
+	if _, err := repo.ApplySubmissionProgress(context.Background(), ApplySubmissionProgressInput{SubmissionID: uuid.New(), MatchID: matchID, UserID: uuid.New()}); !errors.Is(err, ErrSubmissionUserNotInMatch) {
 		t.Fatalf("non participant error = %v", err)
 	}
 }
