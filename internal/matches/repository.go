@@ -29,7 +29,15 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 }
 
 func (r *Repository) CreateMatch(ctx context.Context, match Match) (Match, error) {
-	row := r.db.QueryRow(
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return Match{}, fmt.Errorf("create match: %w", err)
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	if err := PreparePlayersForMatch(ctx, tx, match.Player1ID, match.Player2ID); err != nil {
+		return Match{}, fmt.Errorf("create match: %w", err)
+	}
+	row := tx.QueryRow(
 		ctx,
 		createMatchQuery,
 		match.ID,
@@ -66,7 +74,7 @@ func (r *Repository) CreateMatch(ctx context.Context, match Match) (Match, error
 		return Match{}, fmt.Errorf("create match: %w", err)
 	}
 
-	return created, nil
+	return created, tx.Commit(ctx)
 }
 
 func (r *Repository) GetMatch(ctx context.Context, matchID uuid.UUID) (Match, error) {
@@ -307,12 +315,20 @@ func (r *Repository) EnqueuePlayer(ctx context.Context, input JoinQueueInput) er
 		input.TaskMode = TaskModeNormal
 	}
 
-	_, err := r.db.Exec(ctx, enqueuePlayerQuery, input.UserID, input.RatingMode, input.TaskMode, input.IsRated)
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("enqueue player: %w", err)
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	if err := lockAvailablePlayers(ctx, tx, []uuid.UUID{input.UserID}); err != nil {
+		return fmt.Errorf("enqueue player: %w", err)
+	}
+	_, err = tx.Exec(ctx, enqueuePlayerQuery, input.UserID, input.RatingMode, input.TaskMode, input.IsRated)
 	if err != nil {
 		return fmt.Errorf("enqueue player: %w", err)
 	}
 
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) GetQueuedPlayer(ctx context.Context, userID uuid.UUID) (*QueuedPlayer, error) {

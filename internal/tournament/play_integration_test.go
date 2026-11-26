@@ -66,6 +66,12 @@ func TestTournamentRoundRobinLifecycle(t *testing.T) {
 	if err := service.Transition(ctx, organizer, draft.ID, finalize, "round-robin-test"); !errors.Is(err, access.ErrConflict) {
 		t.Fatalf("completed with unfinished fixtures: %v", err)
 	}
+	matchRepo := matches.NewRepository(db)
+	for _, player := range []uuid.UUID{player1, player2} {
+		if err := matchRepo.EnqueuePlayer(ctx, matches.JoinQueueInput{UserID: player}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	matchID, err = service.ScheduleFixture(ctx, organizer, draft.ID, board.Fixtures[0].ID, "round-robin-test")
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +79,22 @@ func TestTournamentRoundRobinLifecycle(t *testing.T) {
 	if _, err := service.ScheduleFixture(ctx, organizer, draft.ID, board.Fixtures[0].ID, "round-robin-test"); !errors.Is(err, access.ErrConflict) {
 		t.Fatalf("scheduled an already active pairing: %v", err)
 	}
-	matchRepo := matches.NewRepository(db)
+	for _, player := range []uuid.UUID{player1, player2} {
+		if queued, err := matchRepo.GetQueuedPlayer(ctx, player); err != nil || queued != nil {
+			t.Fatalf("tournament player still in matchmaking: %v (%v)", queued, err)
+		}
+		if err := matchRepo.EnqueuePlayer(ctx, matches.JoinQueueInput{UserID: player}); !errors.Is(err, matches.ErrPlayerAlreadyInMatch) {
+			t.Fatalf("tournament player allowed to rejoin queue: %v", err)
+		}
+	}
+	challenger := createTournamentPlayer(t, db, ctx, access.User)
+	overlap := matches.Match{
+		ID: uuid.New(), Player1ID: challenger, Player2ID: player1, Status: matches.MatchStatusPending,
+		RatingMode: "global", TaskMode: matches.TaskModeNormal, JudgeStatus: matches.JudgeStatusNotStarted,
+	}
+	if _, err := matchRepo.CreateMatch(ctx, overlap); !errors.Is(err, matches.ErrPlayerAlreadyInMatch) {
+		t.Fatalf("regular match overlaps tournament match: %v", err)
+	}
 	if _, err := matchRepo.StartMatch(ctx, matchID, player1, time.Minute); err != nil {
 		t.Fatal(err)
 	}

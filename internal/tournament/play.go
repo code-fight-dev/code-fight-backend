@@ -7,6 +7,7 @@ import (
 	"code-fight-backend/internal/access"
 	"code-fight-backend/internal/audit"
 	"code-fight-backend/internal/managementtx"
+	"code-fight-backend/internal/matches"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -291,24 +292,18 @@ func (s *Service) ScheduleFixture(ctx context.Context, actorID, tournamentID, fi
 	if previousStatus != "unscheduled" && previousStatus != "cancelled" {
 		return uuid.Nil, access.ErrConflict
 	}
-	// Fixture participants are stored in UUID order. Lock both in that order
-	// before checking for active matches across tournaments.
-	for _, player := range []uuid.UUID{player1, player2} {
-		if _, err := tx.Exec(ctx,
-			"select pg_advisory_xact_lock(hashtextextended('tournament-player:' || $1::text, 0))", player.String(),
-		); err != nil {
-			return uuid.Nil, err
+	if err := matches.PreparePlayersForMatch(ctx, tx, player1, player2); err != nil {
+		if errors.Is(err, matches.ErrPlayerAlreadyInMatch) {
+			return uuid.Nil, access.ErrConflict
 		}
+		return uuid.Nil, err
 	}
 	matchID := uuid.New()
 	result, err := tx.Exec(ctx, `
 insert into matches (id,task_id,task_difficulty_snapshot,player1_id,player2_id,is_rated)
 select $1,t.task_id,task.difficulty,$3,$4,false
 from tournaments t join tasks task on task.id=t.task_id and task.is_active
-where t.id=$2 and not exists (
-    select 1 from matches where status in ('pending','running')
-      and (player1_id in ($3,$4) or player2_id in ($3,$4))
-)`, matchID, tournamentID, player1, player2)
+where t.id=$2`, matchID, tournamentID, player1, player2)
 	if err != nil {
 		return uuid.Nil, err
 	}
