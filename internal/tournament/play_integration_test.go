@@ -9,6 +9,7 @@ import (
 	"code-fight-backend/internal/access"
 	"code-fight-backend/internal/auth"
 	"code-fight-backend/internal/matches"
+	"code-fight-backend/internal/notifications"
 	"code-fight-backend/internal/testsupport"
 
 	"github.com/google/uuid"
@@ -79,6 +80,35 @@ func TestTournamentRoundRobinLifecycle(t *testing.T) {
 	if _, err := service.ScheduleFixture(ctx, organizer, draft.ID, board.Fixtures[0].ID, "round-robin-test"); !errors.Is(err, access.ErrConflict) {
 		t.Fatalf("scheduled an already active pairing: %v", err)
 	}
+	inbox := notifications.NewStore(db)
+	first, err := inbox.List(ctx, player1, nil)
+	if err != nil || first.Unread != 2 || len(first.Items) != 2 || first.Items[0].DeadlineAt == nil ||
+		first.Items[1].Kind != "tournament.started" ||
+		first.Items[0].Href != "/arena/match/"+matchID.String() {
+		t.Fatalf("first player inbox: %#v, %v", first, err)
+	}
+	if err := inbox.MarkRead(ctx, player2, &first.Items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	first, err = inbox.List(ctx, player1, nil)
+	if err != nil || first.Unread != 2 {
+		t.Fatalf("another player marked the notification read: %#v, %v", first, err)
+	}
+	second, err := inbox.List(ctx, player2, nil)
+	if err != nil || second.Unread != 2 || len(second.Items) != 2 || second.Items[0].ID == first.Items[0].ID ||
+		second.Items[0].DeadlineAt == nil || !second.Items[0].DeadlineAt.Equal(*first.Items[0].DeadlineAt) {
+		t.Fatalf("second player inbox: %#v, %v", second, err)
+	}
+	if err := inbox.MarkRead(ctx, player1, &first.Items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	first, err = inbox.List(ctx, player1, nil)
+	if err != nil || first.Unread != 1 || len(first.Items) != 2 || first.Items[0].ReadAt == nil {
+		t.Fatalf("read state was not saved: %#v, %v", first, err)
+	}
+	if err := inbox.MarkRead(ctx, player2, nil); err != nil {
+		t.Fatal(err)
+	}
 	for _, player := range []uuid.UUID{player1, player2} {
 		if queued, err := matchRepo.GetQueuedPlayer(ctx, player); err != nil || queued != nil {
 			t.Fatalf("tournament player still in matchmaking: %v (%v)", queued, err)
@@ -120,6 +150,11 @@ func TestTournamentRoundRobinLifecycle(t *testing.T) {
 	var history int
 	if err := db.QueryRow(ctx, "select count(*) from rating_history where match_id=$1", matchID).Scan(&history); err != nil || history != 0 {
 		t.Fatalf("tournament changed global rating: %d, %v", history, err)
+	}
+	finalInbox, err := inbox.List(ctx, match.Player1ID, nil)
+	if err != nil || len(finalInbox.Items) != 4 ||
+		finalInbox.Items[0].Kind != "tournament.completed" || finalInbox.Items[1].Kind != "match.finished" {
+		t.Fatalf("winner inbox: %#v, %v", finalInbox, err)
 	}
 }
 

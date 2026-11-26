@@ -1,5 +1,7 @@
 package matches
 
+const TournamentReadyInterval = "15 minutes"
+
 const matchSelectColumns = `
 	id,
 	rating_mode,
@@ -320,7 +322,7 @@ const cancelExpiredPendingMatchesQuery = `
 		where status = 'pending'
 		  and created_at <= now() - case when exists (
 		      select 1 from tournament_fixtures tf where tf.match_id = matches.id
-		  ) then interval '15 minutes' else ($1::text)::interval end
+		  ) then interval '` + TournamentReadyInterval + `' else ($1::text)::interval end
 		order by created_at asc
 		limit $2
 		for update skip locked

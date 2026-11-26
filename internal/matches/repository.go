@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	"code-fight-backend/internal/notifications"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -37,7 +38,40 @@ func (r *Repository) CreateMatch(ctx context.Context, match Match) (Match, error
 	if err := PreparePlayersForMatch(ctx, tx, match.Player1ID, match.Player2ID); err != nil {
 		return Match{}, fmt.Errorf("create match: %w", err)
 	}
-	row := tx.QueryRow(
+	created, err := createMatchRow(ctx, tx, match)
+	if err != nil {
+		return Match{}, err
+	}
+	if match.offerKind == "" {
+		return created, tx.Commit(ctx)
+	}
+	item := notifications.Item{Kind: match.offerKind, Href: "/arena/match/" + created.ID.String()}
+	if match.offerKind == "match.invited" {
+		var username string
+		if err := tx.QueryRow(ctx, "select username from users where id=$1", match.Player1ID).Scan(&username); err != nil {
+			return Match{}, err
+		}
+		item.Title = "Match invitation"
+		item.Message = username + " invited you to a match. Open it to confirm readiness."
+		if err := notifications.Insert(ctx, tx, match.Player2ID, item); err != nil {
+			return Match{}, err
+		}
+	} else {
+		item.Title = "Opponent found"
+		item.Message = "Open your Arena match to confirm readiness."
+		for _, id := range []uuid.UUID{match.Player1ID, match.Player2ID} {
+			if err := notifications.Insert(ctx, tx, id, item); err != nil {
+				return Match{}, err
+			}
+		}
+	}
+	return created, tx.Commit(ctx)
+}
+
+func createMatchRow(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, match Match) (Match, error) {
+	row := db.QueryRow(
 		ctx,
 		createMatchQuery,
 		match.ID,
@@ -74,7 +108,7 @@ func (r *Repository) CreateMatch(ctx context.Context, match Match) (Match, error
 		return Match{}, fmt.Errorf("create match: %w", err)
 	}
 
-	return created, tx.Commit(ctx)
+	return created, nil
 }
 
 func (r *Repository) GetMatch(ctx context.Context, matchID uuid.UUID) (Match, error) {

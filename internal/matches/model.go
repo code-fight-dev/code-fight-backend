@@ -63,6 +63,7 @@ const (
 )
 
 type Match struct {
+	offerKind              string
 	ID                     uuid.UUID        `json:"id"`
 	RatingMode             string           `json:"rating_mode"`
 	TaskMode               TaskMode         `json:"task_mode"`

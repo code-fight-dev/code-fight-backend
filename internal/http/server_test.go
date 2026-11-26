@@ -116,5 +116,6 @@ func newServerTestApp() *fiber.App {
 		nil,
 		administration.NewHandler(nil),
 		tournament.NewHandler(nil),
+		realtime.NewBroker(),
 	)
 }
