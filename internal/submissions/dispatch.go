@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"code-fight-backend/internal/judge"
@@ -107,9 +106,7 @@ func (s *Service) dispatchNext(ctx context.Context, repo *PGRepository) (bool, e
 	if failure == nil && (response == nil || response.JudgeSubmissionID != id) {
 		failure = errors.New("judge returned a different job ID")
 	}
-	var rejection *judge.SubmitHTTPError
-	permanent := errors.As(failure, &rejection) &&
-		(rejection.Code == "validation_error" || rejection.Status == http.StatusRequestEntityTooLarge)
+	permanent := permanentJudgeRejection(failure)
 	if failure != nil && !permanent {
 		_, err = tx.Exec(ctx, `update judge_dispatch
 			set attempts=least(attempts+1,6),
