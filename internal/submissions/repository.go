@@ -153,17 +153,15 @@ func (r *PGRepository) createWithJudgeCapacity(ctx context.Context, userID, stat
 		return err
 	}
 
-	// A queued record can survive a failed dispatch. Give in-flight dispatches a
-	// reservation, but do not let undelivered records use capacity indefinitely.
+	// A queued job may already have been accepted by Judge even if its HTTP
+	// response never arrived. Only a terminal state releases its reservation.
 	const activeJobs = `
 select count(*) from (
     select 1 from submissions
     where user_id = $1 and status in ('queued', 'sent_to_judge', 'running')
-      and (status <> 'queued' or updated_at >= now() - interval '2 minutes')
     union all
     select 1 from code_runs
     where user_id = $1 and status in ('queued', 'sent_to_judge', 'running')
-      and (status <> 'queued' or updated_at >= now() - interval '2 minutes')
     limit $2
 ) active`
 	var count int
@@ -309,11 +307,12 @@ func (r *PGRepository) MarkSentToJudge(ctx context.Context, submissionID, judgeS
 	const q = `
 update submissions
 set
-    status = 'sent_to_judge',
+    status = case when status = 'queued' then 'sent_to_judge' else status end,
     judge_submission_id = $2,
-    judge_status = $3,
+    judge_status = case when status = 'queued' then $3 else judge_status end,
     updated_at = now()
-where id = $1`
+where id = $1
+  and (judge_submission_id = $2 or (status = 'queued' and judge_submission_id is null))`
 
 	ct, err := r.db.Exec(ctx, q, submissionID, judgeSubmissionID, judgeStatus)
 	if err != nil {
@@ -329,11 +328,12 @@ func (r *PGRepository) MarkCodeRunSentToJudge(ctx context.Context, codeRunID, ju
 	const q = `
 update code_runs
 set
-    status = 'sent_to_judge',
+    status = case when status = 'queued' then 'sent_to_judge' else status end,
     judge_submission_id = $2,
-    judge_status = $3,
+    judge_status = case when status = 'queued' then $3 else judge_status end,
     updated_at = now()
-where id = $1`
+where id = $1
+  and (judge_submission_id = $2 or (status = 'queued' and judge_submission_id is null))`
 
 	ct, err := r.db.Exec(ctx, q, codeRunID, judgeSubmissionID, judgeStatus)
 	if err != nil {

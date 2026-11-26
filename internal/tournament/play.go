@@ -296,14 +296,11 @@ func (s *Service) ScheduleFixture(ctx context.Context, actorID, tournamentID, fi
 	if previousStatus != "unscheduled" && previousStatus != "cancelled" {
 		return uuid.Nil, access.ErrConflict
 	}
-	// Fixture participants are stored in UUID order. Lock both in that order
-	// before checking for active matches across tournaments.
-	for _, player := range []uuid.UUID{player1, player2} {
-		if _, err := tx.Exec(ctx,
-			"select pg_advisory_xact_lock(hashtextextended('tournament-player:' || $1::text, 0))", player.String(),
-		); err != nil {
-			return uuid.Nil, err
+	if err := matches.PreparePlayersForMatch(ctx, tx, player1, player2); err != nil {
+		if errors.Is(err, matches.ErrPlayerAlreadyInMatch) {
+			return uuid.Nil, access.ErrConflict
 		}
+		return uuid.Nil, err
 	}
 	matchID := uuid.New()
 	var deadline time.Time
@@ -311,10 +308,7 @@ func (s *Service) ScheduleFixture(ctx context.Context, actorID, tournamentID, fi
 insert into matches (id,task_id,task_difficulty_snapshot,player1_id,player2_id,is_rated)
 select $1,t.task_id,task.difficulty,$3,$4,false
 from tournaments t join tasks task on task.id=t.task_id and task.is_active
-where t.id=$2 and not exists (
-    select 1 from matches where status in ('pending','running')
-      and (player1_id in ($3,$4) or player2_id in ($3,$4))
-) returning created_at + interval '`+matches.TournamentReadyInterval+`'`, matchID, tournamentID, player1, player2).Scan(&deadline)
+where t.id=$2 returning created_at + interval '`+matches.TournamentReadyInterval+`'`, matchID, tournamentID, player1, player2).Scan(&deadline)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, access.ErrConflict
 	}
