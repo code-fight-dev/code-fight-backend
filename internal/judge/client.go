@@ -36,7 +36,8 @@ func NewHTTPClient(baseURL string, timeout time.Duration, apiToken string) *HTTP
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		apiToken: strings.TrimSpace(apiToken),
 		httpClient: &http.Client{
-			Timeout: timeout,
+			Timeout:       timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }
@@ -153,8 +154,6 @@ func validateSubmitRequest(req SubmitRequest) error {
 		return fmt.Errorf("judge submit: source_code is required")
 	case strings.TrimSpace(req.CallbackURL) == "":
 		return fmt.Errorf("judge submit: callback_url is required")
-	case strings.TrimSpace(req.CallbackToken) == "":
-		return fmt.Errorf("judge submit: callback_token is required")
 	default:
 		return nil
 	}

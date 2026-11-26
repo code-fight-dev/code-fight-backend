@@ -31,7 +31,7 @@ type SubmitRequest struct {
 	LanguageVersion string `json:"language_version"`
 	SourceCode      string `json:"source_code"`
 	CallbackURL     string `json:"callback_url"`
-	CallbackToken   string `json:"callback_token"`
+	CallbackToken   string `json:"-"`
 
 	Limits SubmitLimits `json:"limits"`
 	Tests  []SubmitTest `json:"tests"`

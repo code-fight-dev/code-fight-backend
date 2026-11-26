@@ -508,8 +508,6 @@ func (r *Repository) ListMatchReplaySubmissions(ctx context.Context, matchID uui
 			&item.Score,
 			&item.ExitCode,
 			&item.CompileLog,
-			&item.StdoutTruncated,
-			&item.StderrTruncated,
 			&item.CreatedAt,
 			&item.StartedAt,
 			&item.FinishedAt,
