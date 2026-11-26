@@ -40,32 +40,31 @@ type CodeRunTestResultDTO struct {
 }
 
 type SubmissionResponse struct {
-	ID                string                    `json:"id"`
-	MatchID           *string                   `json:"match_id,omitempty"`
-	TaskID            string                    `json:"task_id"`
-	UserID            string                    `json:"user_id"`
-	Language          string                    `json:"language"`
-	LanguageVersion   string                    `json:"language_version"`
-	Status            string                    `json:"status"`
-	Verdict           *string                   `json:"verdict,omitempty"`
-	JudgeSubmissionID *string                   `json:"judge_submission_id,omitempty"`
-	JudgeStatus       *string                   `json:"judge_status,omitempty"`
-	ErrorMessage      *string                   `json:"error_message,omitempty"`
-	PassedTests       int                       `json:"passed_tests"`
-	TotalTests        int                       `json:"total_tests"`
-	CompileTimeMs     *int                      `json:"compile_time_ms,omitempty"`
-	RunTimeMs         *int                      `json:"run_time_ms,omitempty"`
-	PeakMemoryKb      *int                      `json:"peak_memory_kb,omitempty"`
-	Score             int                       `json:"score"`
-	ExitCode          *int                      `json:"exit_code,omitempty"`
-	CompileLog        *string                   `json:"compile_log,omitempty"`
-	StdoutTruncated   *string                   `json:"stdout_truncated,omitempty"`
-	StderrTruncated   *string                   `json:"stderr_truncated,omitempty"`
-	CreatedAt         string                    `json:"created_at"`
-	StartedAt         *string                   `json:"started_at,omitempty"`
-	FinishedAt        *string                   `json:"finished_at,omitempty"`
-	UpdatedAt         string                    `json:"updated_at"`
-	TestResults       []SubmissionTestResultDTO `json:"test_results"`
+	ID                string  `json:"id"`
+	MatchID           *string `json:"match_id,omitempty"`
+	TaskID            string  `json:"task_id"`
+	UserID            string  `json:"user_id"`
+	Language          string  `json:"language"`
+	LanguageVersion   string  `json:"language_version"`
+	Status            string  `json:"status"`
+	Verdict           *string `json:"verdict,omitempty"`
+	JudgeSubmissionID *string `json:"judge_submission_id,omitempty"`
+	JudgeStatus       *string `json:"judge_status,omitempty"`
+	ErrorMessage      *string `json:"error_message,omitempty"`
+	PassedTests       int     `json:"passed_tests"`
+	TotalTests        int     `json:"total_tests"`
+	CompileTimeMs     *int    `json:"compile_time_ms,omitempty"`
+	RunTimeMs         *int    `json:"run_time_ms,omitempty"`
+	PeakMemoryKb      *int    `json:"peak_memory_kb,omitempty"`
+	Score             int     `json:"score"`
+	ExitCode          *int    `json:"exit_code,omitempty"`
+	CompileLog        *string `json:"compile_log,omitempty"`
+
+	CreatedAt   string                    `json:"created_at"`
+	StartedAt   *string                   `json:"started_at,omitempty"`
+	FinishedAt  *string                   `json:"finished_at,omitempty"`
+	UpdatedAt   string                    `json:"updated_at"`
+	TestResults []SubmissionTestResultDTO `json:"test_results"`
 }
 
 type CodeRunResponse struct {
@@ -117,8 +116,6 @@ func ToSubmissionResponse(s *Submission, tests []SubmissionTestResult) Submissio
 		Score:             s.Score,
 		ExitCode:          s.ExitCode,
 		CompileLog:        s.CompileLog,
-		StdoutTruncated:   s.StdoutTruncated,
-		StderrTruncated:   s.StderrTruncated,
 		CreatedAt:         s.CreatedAt.Format(timeLayout),
 		UpdatedAt:         s.UpdatedAt.Format(timeLayout),
 		TestResults:       make([]SubmissionTestResultDTO, 0, len(tests)),
