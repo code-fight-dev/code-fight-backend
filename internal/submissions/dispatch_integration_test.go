@@ -81,3 +81,27 @@ func TestDurableDispatchRetriesWithSameID(t *testing.T) {
 		t.Fatalf("submission after acknowledgement = %#v, %v", running, err)
 	}
 }
+
+func TestDurableDispatchFinishesInvalidRequest(t *testing.T) {
+	db, ctx := testsupport.RequirePostgres(t)
+	repo := NewPGRepository(db)
+	user := createSubmissionTestUser(t, db, ctx)
+	task, _, _ := createSubmissionTestTask(t, db, ctx)
+	service := &Service{repo: repo, taskRepo: NewPGTaskRepository(db), maxSourceBytes: 65536, judgeClient: dispatchTestClient{submit: func(context.Context, judge.SubmitRequest) (*judge.SubmitResponse, error) {
+		return nil, &judge.SubmitHTTPError{Status: 400, Code: "invalid_json"}
+	}}}
+	sub, err := service.CreateTaskSubmission(ctx, user, task, CreateSubmissionRequest{Language: "go", LanguageVersion: "1.24", SourceCode: "package main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed, err := service.dispatchNext(ctx, repo); !processed || err == nil {
+		t.Fatalf("dispatch = %t, %v", processed, err)
+	}
+	result, err := repo.GetByJudgeSubmissionID(ctx, sub.ID)
+	if err != nil || result.Status != StatusFailed {
+		t.Fatalf("stored result = %+v, %v", result, err)
+	}
+	if processed, err := service.dispatchNext(ctx, repo); processed || err != nil {
+		t.Fatalf("unexpected retry = %t, %v", processed, err)
+	}
+}

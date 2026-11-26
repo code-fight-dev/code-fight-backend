@@ -401,22 +401,20 @@ func (s *Service) HandleJudgeCallback(ctx context.Context, payload judge.Callbac
 	}
 
 	err = s.repo.Complete(ctx, sub.ID, CompleteInput{
-		Status:          finalStatus,
-		JudgeStatus:     payload.JudgeStatus,
-		Verdict:         payload.Verdict,
-		ErrorMessage:    payload.ErrorMessage,
-		PassedTests:     payload.PassedTests,
-		TotalTests:      payload.TotalTests,
-		CompileTimeMs:   payload.CompileTimeMs,
-		RunTimeMs:       payload.RunTimeMs,
-		PeakMemoryKb:    payload.PeakMemoryKb,
-		Score:           payload.Score,
-		ExitCode:        payload.ExitCode,
-		CompileLog:      payload.CompileLog,
-		StdoutTruncated: payload.StdoutTruncated,
-		StderrTruncated: payload.StderrTruncated,
-		StartedAt:       payload.StartedAt,
-		FinishedAt:      payload.FinishedAt,
+		Status:        finalStatus,
+		JudgeStatus:   payload.JudgeStatus,
+		Verdict:       payload.Verdict,
+		ErrorMessage:  payload.ErrorMessage,
+		PassedTests:   payload.PassedTests,
+		TotalTests:    payload.TotalTests,
+		CompileTimeMs: payload.CompileTimeMs,
+		RunTimeMs:     payload.RunTimeMs,
+		PeakMemoryKb:  payload.PeakMemoryKb,
+		Score:         payload.Score,
+		ExitCode:      payload.ExitCode,
+		CompileLog:    payload.CompileLog,
+		StartedAt:     payload.StartedAt,
+		FinishedAt:    payload.FinishedAt,
 	}, tests)
 	if err != nil {
 		if errors.Is(err, ErrStaleJudgeCallback) {
@@ -971,10 +969,14 @@ func (s *Service) sendCodeRunToJudge(ctx context.Context, run *CodeRun, input Cr
 	return nil
 }
 
-func judgeRejection(err error) (CompleteInput, bool) {
+func permanentJudgeRejection(err error) bool {
 	var rejection *judge.SubmitHTTPError
-	if !errors.As(err, &rejection) || rejection.Status != http.StatusBadRequest ||
-		(rejection.Code != "validation_error" && rejection.Code != "invalid_json") {
+	return errors.As(err, &rejection) && (rejection.Status == http.StatusRequestEntityTooLarge ||
+		rejection.Status == http.StatusBadRequest && (rejection.Code == "validation_error" || rejection.Code == "invalid_json"))
+}
+
+func judgeRejection(err error) (CompleteInput, bool) {
+	if !permanentJudgeRejection(err) {
 		return CompleteInput{}, false
 	}
 	message := "Judge rejected this execution request"
