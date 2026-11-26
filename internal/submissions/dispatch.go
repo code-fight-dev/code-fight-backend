@@ -33,9 +33,6 @@ func (s *Service) persistSubmission(ctx context.Context, submission *Submission)
 		submission.JudgeSubmissionID = &submission.ID
 		return repo.createSubmission(ctx, submission, payload)
 	}
-	if err := s.repo.Create(ctx, submission); err != nil {
-		return err
-	}
 	return s.sendToJudge(ctx, submission)
 }
 
@@ -51,9 +48,6 @@ func (s *Service) persistCodeRun(ctx context.Context, run *CodeRun, input Create
 		}
 		run.JudgeSubmissionID = &run.ID
 		return repo.createCodeRun(ctx, run, payload)
-	}
-	if err := s.repo.CreateCodeRun(ctx, run); err != nil {
-		return err
 	}
 	return s.sendCodeRunToJudge(ctx, run, input)
 }
