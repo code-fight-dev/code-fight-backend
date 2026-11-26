@@ -74,33 +74,32 @@ type UserTaskStats struct {
 }
 
 type TaskSubmission struct {
-	ID                string                     `json:"id"`
-	MatchID           *string                    `json:"matchId,omitempty"`
-	TaskID            string                     `json:"taskId"`
-	UserID            string                     `json:"userId"`
-	Language          string                     `json:"language"`
-	LanguageVersion   string                     `json:"languageVersion"`
-	SourceCode        string                     `json:"sourceCode"`
-	Status            string                     `json:"status"`
-	Verdict           *string                    `json:"verdict,omitempty"`
-	JudgeSubmissionID *string                    `json:"judgeSubmissionId,omitempty"`
-	JudgeStatus       *string                    `json:"judgeStatus,omitempty"`
-	ErrorMessage      *string                    `json:"errorMessage,omitempty"`
-	PassedTests       int                        `json:"passedTests"`
-	TotalTests        int                        `json:"totalTests"`
-	CompileTimeMs     *int                       `json:"compileTimeMs,omitempty"`
-	RunTimeMs         *int                       `json:"runTimeMs,omitempty"`
-	PeakMemoryKb      *int                       `json:"peakMemoryKb,omitempty"`
-	Score             int                        `json:"score"`
-	ExitCode          *int                       `json:"exitCode,omitempty"`
-	CompileLog        *string                    `json:"compileLog,omitempty"`
-	StdoutTruncated   *string                    `json:"stdoutTruncated,omitempty"`
-	StderrTruncated   *string                    `json:"stderrTruncated,omitempty"`
-	CreatedAt         string                     `json:"createdAt"`
-	StartedAt         *string                    `json:"startedAt,omitempty"`
-	FinishedAt        *string                    `json:"finishedAt,omitempty"`
-	UpdatedAt         string                     `json:"updatedAt"`
-	TestResults       []TaskSubmissionTestResult `json:"testResults"`
+	ID                string  `json:"id"`
+	MatchID           *string `json:"matchId,omitempty"`
+	TaskID            string  `json:"taskId"`
+	UserID            string  `json:"userId"`
+	Language          string  `json:"language"`
+	LanguageVersion   string  `json:"languageVersion"`
+	SourceCode        string  `json:"sourceCode"`
+	Status            string  `json:"status"`
+	Verdict           *string `json:"verdict,omitempty"`
+	JudgeSubmissionID *string `json:"judgeSubmissionId,omitempty"`
+	JudgeStatus       *string `json:"judgeStatus,omitempty"`
+	ErrorMessage      *string `json:"errorMessage,omitempty"`
+	PassedTests       int     `json:"passedTests"`
+	TotalTests        int     `json:"totalTests"`
+	CompileTimeMs     *int    `json:"compileTimeMs,omitempty"`
+	RunTimeMs         *int    `json:"runTimeMs,omitempty"`
+	PeakMemoryKb      *int    `json:"peakMemoryKb,omitempty"`
+	Score             int     `json:"score"`
+	ExitCode          *int    `json:"exitCode,omitempty"`
+	CompileLog        *string `json:"compileLog,omitempty"`
+
+	CreatedAt   string                     `json:"createdAt"`
+	StartedAt   *string                    `json:"startedAt,omitempty"`
+	FinishedAt  *string                    `json:"finishedAt,omitempty"`
+	UpdatedAt   string                     `json:"updatedAt"`
+	TestResults []TaskSubmissionTestResult `json:"testResults"`
 }
 
 type TaskSubmissionTestResult struct {

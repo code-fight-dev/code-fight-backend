@@ -1446,8 +1446,6 @@ func fakeReplaySubmissionRow(matchID uuid.UUID, taskID uuid.UUID, userID uuid.UU
 		100,
 		nil,
 		nil,
-		nil,
-		nil,
 		now,
 		nil,
 		nil,

@@ -24,13 +24,14 @@ const (
 )
 
 type SubmitRequest struct {
+	DurableDispatch bool   `json:"durable_dispatch,omitempty"`
 	SubmissionID    string `json:"submission_id"`
 	TaskID          string `json:"task_id"`
 	Language        string `json:"language"`
 	LanguageVersion string `json:"language_version"`
 	SourceCode      string `json:"source_code"`
 	CallbackURL     string `json:"callback_url"`
-	CallbackToken   string `json:"callback_token"`
+	CallbackToken   string `json:"-"`
 
 	Limits SubmitLimits `json:"limits"`
 	Tests  []SubmitTest `json:"tests"`
