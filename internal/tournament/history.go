@@ -52,14 +52,14 @@ func (s *Service) History(ctx context.Context, userID uuid.UUID, limit int, rawC
 	defer cleanup()
 	rows, err := tx.Query(ctx, `select t.id,t.slug,t.title,t.status,p.joined_at,t.completed_at,
 		t.registration_closes_at,t.starts_at,t.ends_at,score.played,score.wins,score.draws,coalesce(p.joined_at,t.created_at),
-		c.rating_before,c.rating_after,t.format,r.rank,r.solved,r.penalty_seconds
+		c.rating_before,c.rating_after,t.format,coalesce(r.rank,p.bracket_rank),r.solved,r.penalty_seconds
 		from tournament_participants p join tournaments t on t.id=p.tournament_id
 		left join contest_rating_changes c on c.tournament_id=t.id and c.user_id=p.user_id
 		left join tournament_problem_results r on r.tournament_id=t.id and r.user_id=p.user_id
 		cross join lateral (
 			select count(*) as played, count(*) filter (where m.winner_id=p.user_id) as wins,
 				count(*) filter (where m.result_type='draw') as draws
-			from tournament_fixtures f join matches m on m.id=f.match_id and m.status='finished'
+			from tournament_fixtures f join matches m on m.tournament_fixture_id=f.id and m.status='finished'
 			where f.tournament_id=t.id and p.user_id in (f.player1_id,f.player2_id)
 		) score
 		where p.user_id=$1 and t.status <> 'draft'

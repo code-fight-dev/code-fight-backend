@@ -102,6 +102,9 @@ func (s *Service) advanceSchedule(ctx context.Context) (bool, error) {
 			(t.status='published' and t.starts_at <= clock_timestamp())
 			or (t.status='running' and case when t.format='shared_problem_set' then
 				t.ends_at <= clock_timestamp() and not `+sharedContestHasPendingSubmissions+`
+			when t.format='single_elimination' then
+				(t.ends_at <= clock_timestamp() and not `+tournamentHasPendingSubmissions+`)
+				or (t.ends_at > clock_timestamp() and `+bracketHasDecisiveMatch+`)
 			else
 				(t.ends_at <= clock_timestamp() and not `+tournamentHasPendingSubmissions+`)
 				or not exists (
@@ -124,6 +127,18 @@ func (s *Service) advanceSchedule(ctx context.Context) (bool, error) {
 		if err != nil || next == "" {
 			return false, err
 		}
+	} else if format == singleElimination && previous == "running" && !deadlinePassed {
+		changed, champion, err := applyBracketWinners(ctx, tx, id)
+		if err != nil || !changed {
+			return false, err
+		}
+		if !champion {
+			if err := createBracketFixtures(ctx, tx, id); err != nil {
+				return false, err
+			}
+			return true, tx.Commit(ctx)
+		}
+		reason = "final_decided"
 	} else if deadlinePassed {
 		reason = "deadline_passed"
 		// Match submission admission takes the same row lock. Recheck after
@@ -145,8 +160,17 @@ func (s *Service) advanceSchedule(ctx context.Context) (bool, error) {
 			and m.status in ('pending','running')`, id); err != nil {
 			return false, err
 		}
+		if format == singleElimination {
+			if _, _, err := applyBracketWinners(ctx, tx, id); err != nil {
+				return false, err
+			}
+		}
 	} else if previous == "published" {
-		created, err := createFixtures(ctx, tx, id)
+		createPairs := createFixtures
+		if format == singleElimination {
+			createPairs = createBracket
+		}
+		created, err := createPairs(ctx, tx, id)
 		if err != nil {
 			return false, err
 		}

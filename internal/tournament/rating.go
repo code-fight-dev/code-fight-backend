@@ -54,11 +54,12 @@ func applyContestRating(ctx context.Context, tx pgx.Tx, tournamentID uuid.UUID) 
 	if err != nil || claimed.RowsAffected() == 0 {
 		return err
 	}
-	rows, err := tx.Query(ctx, contestStandingsSQL+`
-		select s.user_id, dense_rank() over (order by s.points desc, s.wins desc) as rank,
+	rows, err := tx.Query(ctx, contestStandingsSQL+bracketRanksSQL+`
+		select s.user_id, coalesce(b.rank,dense_rank() over (order by s.points desc, s.wins desc)) as rank,
 			coalesce(r.rating,$2) as rating
 		from standings s left join contest_ratings r on r.user_id=s.user_id
-		where s.played > 0
+		join tournaments t on t.id=$1 left join bracket_ranks b on b.user_id=s.user_id
+		where s.played > 0 and (t.format='round_robin' or (b.has_champion and b.has_decisive_match))
 		union all
 		select s.user_id, s.rank, coalesce(r.rating,$2) as rating
 		from tournament_problem_results s left join contest_ratings r on r.user_id=s.user_id
