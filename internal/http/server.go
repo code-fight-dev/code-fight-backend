@@ -14,6 +14,7 @@ import (
 	"code-fight-backend/internal/matches"
 	"code-fight-backend/internal/metrics"
 	"code-fight-backend/internal/notifications"
+	"code-fight-backend/internal/practice"
 	"code-fight-backend/internal/realtime"
 	"code-fight-backend/internal/submissions"
 	"code-fight-backend/internal/tasks"
@@ -133,6 +134,7 @@ func New(
 	eventsGroup := protectedGroup("/api/events", authHandler.RequireAuth)
 	realtimeHandler.RegisterRoutes(eventsGroup, authHandler.StreamSessionCheck)
 	notifications.RegisterRoutes(protectedGroup("/api/notifications", authHandler.RequireAuth), notifications.NewStore(db), realtimeBroker)
+	practice.RegisterRoutes(protectedGroup("/api/practice", authHandler.RequireAuth), db)
 
 	adminGroup := protectedGroup("/api/admin", authHandler.RequireAuth, auth.RequireRoles(access.Admin))
 	adminHandler.RegisterRoutes(adminGroup)
