@@ -286,8 +286,6 @@ const listMatchReplaySubmissionsQuery = `
 		score,
 		exit_code,
 		compile_log,
-		stdout_truncated,
-		stderr_truncated,
 		created_at,
 		started_at,
 		finished_at,

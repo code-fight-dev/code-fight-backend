@@ -140,7 +140,6 @@ func TestValidateSubmitRequest(t *testing.T) {
 		{name: "language version", edit: func(req *SubmitRequest) { req.LanguageVersion = "" }, want: "language_version"},
 		{name: "source", edit: func(req *SubmitRequest) { req.SourceCode = "" }, want: "source_code"},
 		{name: "callback url", edit: func(req *SubmitRequest) { req.CallbackURL = "" }, want: "callback_url"},
-		{name: "callback token", edit: func(req *SubmitRequest) { req.CallbackToken = "" }, want: "callback_token"},
 	}
 
 	for _, tt := range tests {

@@ -170,8 +170,6 @@ func TestRepositoryStatsAndSubmissionsWithFakeDB(t *testing.T) {
 			100,
 			nil,
 			nil,
-			nil,
-			nil,
 			now,
 			nil,
 			nil,
