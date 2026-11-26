@@ -8,6 +8,24 @@ import (
 	"code-fight-backend/internal/testsupport"
 )
 
+func TestJavaCatalogRequiresJudgeCapability(t *testing.T) {
+	db, ctx := testsupport.RequirePostgres(t)
+	repo := NewRepository(db)
+	for _, version := range []string{"17", "21"} {
+		service := NewService(repo, fakeJudgeLanguages{{Language: "java", Version: version}})
+		challenge, err := service.GetChallengeBySlug(ctx, "mirror-log")
+		if err != nil || challenge == nil {
+			t.Fatalf("Mirror Log catalog: %+v, %v", challenge, err)
+		}
+		if got := challenge.LanguageVersions["java"]; (version == "21" && got != "21") || (version != "21" && got != "") {
+			t.Fatalf("Java %s capability exposed catalog version %q", version, got)
+		}
+		if version == "21" && !strings.Contains(challenge.StarterCodeByLanguage["java"], "public class Main") {
+			t.Fatal("Java starter does not define Main")
+		}
+	}
+}
+
 func TestMultilanguageCatalogMatchesJudgeCapabilities(t *testing.T) {
 	db, ctx := testsupport.RequirePostgres(t)
 
