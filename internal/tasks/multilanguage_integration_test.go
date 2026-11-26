@@ -26,6 +26,24 @@ func TestJavaCatalogRequiresJudgeCapability(t *testing.T) {
 	}
 }
 
+func TestCSharpCatalogRequiresJudgeCapability(t *testing.T) {
+	db, ctx := testsupport.RequirePostgres(t)
+	repo := NewRepository(db)
+	for _, version := range []string{"11.0", "12.0"} {
+		service := NewService(repo, fakeJudgeLanguages{{Language: "csharp", Version: version}})
+		challenge, err := service.GetChallengeBySlug(ctx, "mirror-log")
+		if err != nil || challenge == nil {
+			t.Fatalf("Mirror Log catalog: %+v, %v", challenge, err)
+		}
+		if got := challenge.LanguageVersions["csharp"]; (version == "12.0" && got != "12.0") || (version != "12.0" && got != "") {
+			t.Fatalf("C# %s capability exposed catalog version %q", version, got)
+		}
+		if version == "12.0" && !strings.Contains(challenge.StarterCodeByLanguage["csharp"], "Console.In.ReadToEnd()") {
+			t.Fatal("C# starter does not read stdin")
+		}
+	}
+}
+
 func TestMultilanguageCatalogMatchesJudgeCapabilities(t *testing.T) {
 	db, ctx := testsupport.RequirePostgres(t)
 
