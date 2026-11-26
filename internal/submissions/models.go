@@ -5,6 +5,7 @@ import "time"
 type Submission struct {
 	ID                string
 	MatchID           *string
+	TournamentID      *string
 	TaskID            string
 	UserID            string
 	Language          string

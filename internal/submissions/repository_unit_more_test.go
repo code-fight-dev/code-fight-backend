@@ -572,6 +572,7 @@ func fakeSubmissionRowValues(sub *Submission) []any {
 		sub.StartedAt,
 		sub.FinishedAt,
 		sub.UpdatedAt,
+		sub.TournamentID,
 	}
 }
 

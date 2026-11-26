@@ -58,7 +58,12 @@ func applyContestRating(ctx context.Context, tx pgx.Tx, tournamentID uuid.UUID) 
 		select s.user_id, dense_rank() over (order by s.points desc, s.wins desc) as rank,
 			coalesce(r.rating,$2) as rating
 		from standings s left join contest_ratings r on r.user_id=s.user_id
-		where s.played > 0 order by s.user_id`, tournamentID, initialContestRating)
+		where s.played > 0
+		union all
+		select s.user_id, s.rank, coalesce(r.rating,$2) as rating
+		from tournament_problem_results s left join contest_ratings r on r.user_id=s.user_id
+		where s.tournament_id=$1 and s.judged_submissions > 0
+		order by user_id`, tournamentID, initialContestRating)
 	if err != nil {
 		return err
 	}

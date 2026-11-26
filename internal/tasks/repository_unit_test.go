@@ -146,6 +146,7 @@ func TestRepositoryGetChallengeByID(t *testing.T) {
 func TestRepositoryStatsAndSubmissionsWithFakeDB(t *testing.T) {
 	now := time.Now().UTC()
 	verdict := "accepted"
+	tournamentID := "tournament-1"
 	db := &fakeTasksDB{
 		rows: []pgx.Row{fakeTasksRow{values: []any{2, 1}}},
 		queryRows: []pgx.Rows{&fakeTasksRows{rows: [][]any{{
@@ -174,6 +175,7 @@ func TestRepositoryStatsAndSubmissionsWithFakeDB(t *testing.T) {
 			nil,
 			now,
 			`[{"testCaseId":"case-1","status":"accepted"}]`,
+			&tournamentID,
 		}}}},
 	}
 	repo := &Repository{db: db}
@@ -190,7 +192,8 @@ func TestRepositoryStatsAndSubmissionsWithFakeDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListUserTaskSubmissions returned error: %v", err)
 	}
-	if len(submissions) != 1 || submissions[0].Verdict == nil || len(submissions[0].TestResults) != 1 {
+	if len(submissions) != 1 || submissions[0].Verdict == nil || len(submissions[0].TestResults) != 1 ||
+		submissions[0].TournamentID == nil || *submissions[0].TournamentID != tournamentID {
 		t.Fatalf("submissions = %#v", submissions)
 	}
 }

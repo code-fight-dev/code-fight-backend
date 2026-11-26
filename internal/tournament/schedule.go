@@ -94,20 +94,22 @@ func (s *Service) advanceSchedule(ctx context.Context) (bool, error) {
 	defer cleanup()
 
 	var id uuid.UUID
-	var previous string
+	var previous, format string
 	var deadlinePassed bool
-	err = tx.QueryRow(ctx, `select t.id,t.status,t.ends_at <= clock_timestamp()
+	err = tx.QueryRow(ctx, `select t.id,t.status,t.format,t.ends_at <= clock_timestamp()
 		from tournaments t
 		where t.starts_at is not null and (
 			(t.status='published' and t.starts_at <= clock_timestamp())
-			or (t.status='running' and (
+			or (t.status='running' and case when t.format='shared_problem_set' then
+				t.ends_at <= clock_timestamp() and not `+sharedContestHasPendingSubmissions+`
+			else
 				(t.ends_at <= clock_timestamp() and not `+tournamentHasPendingSubmissions+`)
 				or not exists (
 					select 1 from tournament_fixtures f left join matches m on m.id=f.match_id
 					where f.tournament_id=t.id and m.status is distinct from 'finished'
 				)
-			))
-		) order by t.starts_at,t.id limit 1 for update of t skip locked`).Scan(&id, &previous, &deadlinePassed)
+			end)
+		) order by t.starts_at,t.id limit 1 for update of t skip locked`).Scan(&id, &previous, &format, &deadlinePassed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -117,7 +119,12 @@ func (s *Service) advanceSchedule(ctx context.Context) (bool, error) {
 
 	next := "completed"
 	reason := "all_fixtures_finished"
-	if deadlinePassed {
+	if format == sharedProblemSet {
+		next, reason, err = advanceSharedContest(ctx, tx, id, previous, deadlinePassed)
+		if err != nil || next == "" {
+			return false, err
+		}
+	} else if deadlinePassed {
 		reason = "deadline_passed"
 		// Match submission admission takes the same row lock. Recheck after
 		// waiting for any submission that was committing as the deadline passed.
@@ -167,3 +174,28 @@ const tournamentHasPendingSubmissions = `exists (
 	where f.tournament_id=t.id and m.status='running'
 	and tournament_match_waits_for_judge(m.id, least(m.expires_at, t.ends_at))
 )`
+
+const sharedContestHasPendingSubmissions = `exists (
+	select 1 from submissions s where s.tournament_id=t.id
+	and s.status in ('queued', 'sent_to_judge', 'running')
+)`
+
+func advanceSharedContest(ctx context.Context, tx pgx.Tx, id uuid.UUID, previous string, deadlinePassed bool) (string, string, error) {
+	if !deadlinePassed {
+		return "running", "scheduled_start", nil
+	}
+	// Submission admission holds a shared tournament lock through the
+	// submission and dispatch insert. Recheck with a fresh snapshot.
+	var pending bool
+	if err := tx.QueryRow(ctx, `select `+sharedContestHasPendingSubmissions+`
+		from tournaments t where t.id=$1`, id).Scan(&pending); err != nil {
+		return "", "", err
+	}
+	if pending {
+		if previous == "published" {
+			return "running", "scheduled_start", nil
+		}
+		return "", "", nil
+	}
+	return "completed", "deadline_passed", snapshotProblemStandings(ctx, tx, id)
+}

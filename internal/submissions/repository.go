@@ -90,26 +90,33 @@ func (r *PGRepository) Create(ctx context.Context, s *Submission) error {
 
 func (r *PGRepository) createSubmission(ctx context.Context, s *Submission, dispatch []byte) error {
 	const q = `
+with admission as (select clock_timestamp() as admitted_at)
 insert into submissions (
     id, match_id, task_id, user_id, language, language_version, source_code,
     status, verdict, judge_submission_id, judge_status, error_message,
     passed_tests, total_tests, compile_time_ms, run_time_ms, peak_memory_kb,
     score, exit_code, compile_log, stdout_truncated, stderr_truncated,
-    created_at, started_at, finished_at, updated_at
-) values (
+    created_at, started_at, finished_at, updated_at, tournament_id
+)
+select
     $1, $2, $3, $4, $5, $6, $7,
     $8, $9, $10, $11, $12,
     $13, $14, $15, $16, $17,
     $18, $19, $20, $21, $22,
-    $23, $24, $25, $26
+    case when $27::uuid is null then $23::timestamptz else a.admitted_at end, $24, $25,
+    case when $27::uuid is null then $26::timestamptz else a.admitted_at end, $27
+from admission a
+where $27::uuid is null or exists (
+    select 1 from tournaments t where t.id=$27 and t.status in ('published','running')
+        and a.admitted_at >= t.starts_at and a.admitted_at < t.ends_at
 )`
 
-	return r.createWithJudgeCapacity(ctx, s.UserID, s.Status, s.MatchID, dispatch, false, q,
+	return r.createWithJudgeCapacity(ctx, s.UserID, s.Status, s, dispatch, false, q,
 		s.ID, s.MatchID, s.TaskID, s.UserID, s.Language, s.LanguageVersion, s.SourceCode,
 		s.Status, s.Verdict, s.JudgeSubmissionID, s.JudgeStatus, s.ErrorMessage,
 		s.PassedTests, s.TotalTests, s.CompileTimeMs, s.RunTimeMs, s.PeakMemoryKb,
 		s.Score, s.ExitCode, s.CompileLog, s.StdoutTruncated, s.StderrTruncated,
-		s.CreatedAt, s.StartedAt, s.FinishedAt, s.UpdatedAt,
+		s.CreatedAt, s.StartedAt, s.FinishedAt, s.UpdatedAt, s.TournamentID,
 	)
 }
 
@@ -142,8 +149,9 @@ insert into code_runs (
 	)
 }
 
-func (r *PGRepository) createWithJudgeCapacity(ctx context.Context, userID, status string, matchID *string, dispatch []byte, codeRun bool, query string, args ...any) error {
-	if status != StatusQueued {
+func (r *PGRepository) createWithJudgeCapacity(ctx context.Context, userID, status string, submission *Submission, dispatch []byte, codeRun bool, query string, args ...any) error {
+	inContest := submission != nil && submission.TournamentID != nil
+	if status != StatusQueued && !inContest {
 		_, err := r.db.Exec(ctx, query, args...)
 		return err
 	}
@@ -179,13 +187,22 @@ select count(*) from (
 	if count >= maxActiveJudgeJobsPerUser {
 		return ErrJudgeActiveLimit
 	}
-	if matchID != nil {
-		if err := requireOpenMatchForSubmission(ctx, tx, *matchID); err != nil {
+	if submission != nil && submission.MatchID != nil {
+		if err := requireOpenMatchForSubmission(ctx, tx, *submission.MatchID); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.Exec(ctx, query, args...); err != nil {
+	if inContest {
+		if err := requireContestEntry(ctx, tx, submission); err != nil {
+			return err
+		}
+	}
+	result, err := tx.Exec(ctx, query, args...)
+	if err != nil {
 		return err
+	}
+	if inContest && result.RowsAffected() == 0 {
+		return ErrContestSubmissionWindow
 	}
 	if dispatch != nil {
 		if _, err := tx.Exec(ctx, `insert into judge_dispatch (id, submission_id, code_run_id, payload)
@@ -194,6 +211,27 @@ select count(*) from (
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func requireContestEntry(ctx context.Context, tx pgx.Tx, submission *Submission) error {
+	// Hold the shared tournament lock through admission so completion must
+	// include this submission or close the window before the insert runs.
+	var joined bool
+	err := tx.QueryRow(ctx, `select exists (select 1 from tournament_participants p
+		where p.tournament_id=t.id and p.user_id=$3)
+		from tournaments t join tournament_problems p on p.tournament_id=t.id and p.task_id=$2
+		where t.id=$1 and t.format='shared_problem_set' for share of t`,
+		*submission.TournamentID, submission.TaskID, submission.UserID).Scan(&joined)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrContestProblemNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !joined {
+		return ErrContestNotJoined
+	}
+	return nil
 }
 
 func requireOpenMatchForSubmission(ctx context.Context, tx pgx.Tx, matchID string) error {
@@ -232,7 +270,7 @@ func (r *PGRepository) GetByID(ctx context.Context, id string) (*Submission, []S
     status, verdict, judge_submission_id, judge_status, error_message,
     passed_tests, total_tests, compile_time_ms, run_time_ms, peak_memory_kb,
     score, exit_code, compile_log, stdout_truncated, stderr_truncated,
-    created_at, started_at, finished_at, updated_at
+    created_at, started_at, finished_at, updated_at, tournament_id
 from submissions
 where id = $1`, id)
 	if err != nil {
@@ -336,7 +374,7 @@ func (r *PGRepository) GetByJudgeSubmissionID(ctx context.Context, judgeSubmissi
     status, verdict, judge_submission_id, judge_status, error_message,
     passed_tests, total_tests, compile_time_ms, run_time_ms, peak_memory_kb,
     score, exit_code, compile_log, stdout_truncated, stderr_truncated,
-    created_at, started_at, finished_at, updated_at
+    created_at, started_at, finished_at, updated_at, tournament_id
 from submissions
 where judge_submission_id = $1`, judgeSubmissionID)
 }
@@ -595,6 +633,7 @@ func (r *PGRepository) getSubmissionRow(ctx context.Context, q querier, sql stri
 		&s.StartedAt,
 		&s.FinishedAt,
 		&s.UpdatedAt,
+		&s.TournamentID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

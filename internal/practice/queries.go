@@ -4,7 +4,7 @@ const historySQL = `
 select s.id as submission_id, t.slug as task_slug, t.title as task_title, t.difficulty,
        s.language, s.language_version, s.status, s.verdict, s.created_at as submitted_at
 from submissions s join tasks t on t.id = s.task_id
-where s.user_id = $1 and s.match_id is null
+where s.user_id = $1 and s.match_id is null and s.tournament_id is null
   and ($2 = '' or lower(s.language) = $2)
   and ($3 = '' or s.verdict = $3)
   and ($4::timestamptz is null or (s.created_at, s.id) < ($4, $5))
@@ -13,7 +13,7 @@ order by s.created_at desc, s.id desc limit $6`
 const summarySQL = `
 with practice as materialized (
     select task_id, lower(language) as language, verdict, created_at
-    from submissions where user_id = $1 and match_id is null
+    from submissions where user_id = $1 and match_id is null and tournament_id is null
 ), task_progress as (
     select task_id, min(created_at) filter (where verdict = 'accepted') as first_solved_at
     from practice group by task_id

@@ -24,7 +24,8 @@ type Summary struct {
 	Title         string     `json:"title"`
 	Description   string     `json:"description"`
 	Status        string     `json:"status"`
-	TaskID        uuid.UUID  `json:"taskId"`
+	Format        string     `json:"format"`
+	TaskID        *uuid.UUID `json:"taskId"`
 	OwnerID       uuid.UUID  `json:"ownerId"`
 	ConfigVersion int64      `json:"configVersion"`
 	CompletedAt   *time.Time `json:"completedAt"`
@@ -40,6 +41,9 @@ type Standing struct {
 	Rank                int       `json:"rank"`
 	ContestRatingBefore *int      `json:"contestRatingBefore"`
 	ContestRatingAfter  *int      `json:"contestRatingAfter"`
+	Solved              *int      `json:"solved,omitempty"`
+	PenaltySeconds      *int64    `json:"penaltySeconds,omitempty"`
+	JudgedSubmissions   *int      `json:"judgedSubmissions,omitempty"`
 }
 
 type Fixture struct {
@@ -53,20 +57,23 @@ type Fixture struct {
 }
 
 type Board struct {
-	Tournament Summary    `json:"tournament"`
-	Standings  []Standing `json:"standings"`
-	Fixtures   []Fixture  `json:"fixtures"`
+	Tournament Summary           `json:"tournament"`
+	Standings  []Standing        `json:"standings"`
+	Fixtures   []Fixture         `json:"fixtures"`
+	Problems   *[]ContestProblem `json:"problems,omitempty"`
 }
 
 type TransitionInput struct {
 	Schedule
-	Status                string `json:"status"`
-	TaskSlug              string `json:"taskSlug"`
-	ExpectedConfigVersion int64  `json:"expectedConfigVersion"`
+	Status                string   `json:"status"`
+	Format                string   `json:"format"`
+	TaskSlug              string   `json:"taskSlug"`
+	TaskSlugs             []string `json:"taskSlugs"`
+	ExpectedConfigVersion int64    `json:"expectedConfigVersion"`
 }
 
 const summaryColumns = `id, slug, title, description, status, task_id, owner_id, config_version,
-	registration_closes_at, starts_at, ends_at, completed_at`
+	registration_closes_at, starts_at, ends_at, completed_at, format`
 
 const contestStandingsSQL = `with standings as (
 select p.user_id, u.username, count(m.id) as played,
@@ -87,7 +94,7 @@ func scanSummary(row interface{ Scan(...any) error }) (Summary, error) {
 	var summary Summary
 	err := row.Scan(&summary.ID, &summary.Slug, &summary.Title, &summary.Description,
 		&summary.Status, &summary.TaskID, &summary.OwnerID, &summary.ConfigVersion,
-		&summary.RegistrationClosesAt, &summary.StartsAt, &summary.EndsAt, &summary.CompletedAt)
+		&summary.RegistrationClosesAt, &summary.StartsAt, &summary.EndsAt, &summary.CompletedAt, &summary.Format)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = access.ErrNotFound
 	}
@@ -136,6 +143,13 @@ func (s *Service) Board(ctx context.Context, id uuid.UUID) (Board, error) {
 	if err != nil {
 		return Board{}, err
 	}
+	if summary.Format == sharedProblemSet {
+		board, err := sharedProblemBoard(ctx, tx, summary)
+		if err != nil {
+			return Board{}, err
+		}
+		return board, tx.Commit(ctx)
+	}
 	fixtures, err := tx.Query(ctx, `
 select f.id as id, p1.username as player1, p2.username as player2, f.match_id as match_id,
        coalesce(m.status, case when t.status='completed' then 'cancelled' else 'unscheduled' end) as status,
@@ -166,7 +180,7 @@ order by rank, s.username, s.user_id`, id)
 	if err != nil {
 		return Board{}, err
 	}
-	standingItems, err := pgx.CollectRows(standings, pgx.RowToStructByName[Standing])
+	standingItems, err := pgx.CollectRows(standings, pgx.RowToStructByNameLax[Standing])
 	if err != nil {
 		return Board{}, err
 	}
@@ -241,6 +255,9 @@ func (s *Service) Transition(ctx context.Context, actorID, id uuid.UUID, input T
 	if input.Status != "published" && !input.Schedule.empty() {
 		return access.ErrInvalidInput
 	}
+	if input.Status != "published" && input.Format != "" {
+		return access.ErrInvalidInput
+	}
 	switch input.Status {
 	case "published":
 		if draft.Status != "draft" {
@@ -249,6 +266,15 @@ func (s *Service) Transition(ctx context.Context, actorID, id uuid.UUID, input T
 		schedule := input.Schedule.utc()
 		if err := schedule.validate(); err != nil {
 			return err
+		}
+		if input.Format == sharedProblemSet {
+			if err := publishSharedProblemSet(ctx, tx, id, schedule, input); err != nil {
+				return err
+			}
+			break
+		}
+		if (input.Format != "" && input.Format != "round_robin") || len(input.TaskSlugs) != 0 {
+			return access.ErrInvalidInput
 		}
 		result, err := tx.Exec(ctx, `update tournaments set task_id=tasks.id, status='published',
 			registration_closes_at=$3, starts_at=$4, ends_at=$5
@@ -274,7 +300,7 @@ func (s *Service) Transition(ctx context.Context, actorID, id uuid.UUID, input T
 			return access.ErrConflict
 		}
 	case "completed":
-		if draft.Status != "running" {
+		if draft.Status != "running" || draft.Format == sharedProblemSet {
 			return access.ErrConflict
 		}
 		var unfinished bool
@@ -313,7 +339,7 @@ func (s *Service) ScheduleFixture(ctx context.Context, actorID, tournamentID, fi
 	if err != nil {
 		return uuid.Nil, err
 	}
-	if draft.Status != "running" {
+	if draft.Status != "running" || draft.Format == sharedProblemSet {
 		return uuid.Nil, access.ErrConflict
 	}
 	var player1, player2 uuid.UUID
