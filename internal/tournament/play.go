@@ -61,6 +61,7 @@ type Board struct {
 	Standings  []Standing        `json:"standings"`
 	Fixtures   []Fixture         `json:"fixtures"`
 	Problems   *[]ContestProblem `json:"problems,omitempty"`
+	Bracket    *Bracket          `json:"bracket,omitempty"`
 }
 
 type TransitionInput struct {
@@ -172,10 +173,11 @@ order by p1.username, p2.username, f.id`, id)
 	for index := range fixtureItems {
 		fixtureItems[index].ReadyDeadlineAt = utcTime(fixtureItems[index].ReadyDeadlineAt)
 	}
-	standings, err := tx.Query(ctx, contestStandingsSQL+`
-select s.*, dense_rank() over (order by s.points desc, s.wins desc) as rank,
+	standings, err := tx.Query(ctx, contestStandingsSQL+bracketRanksSQL+`
+select s.*, coalesce(b.rank, dense_rank() over (order by s.points desc, s.wins desc)) as rank,
        c.rating_before as contest_rating_before, c.rating_after as contest_rating_after
-from standings s left join contest_rating_changes c on c.tournament_id=$1 and c.user_id=s.user_id
+from standings s left join bracket_ranks b on b.user_id=s.user_id
+left join contest_rating_changes c on c.tournament_id=$1 and c.user_id=s.user_id
 order by rank, s.username, s.user_id`, id)
 	if err != nil {
 		return Board{}, err
@@ -184,7 +186,14 @@ order by rank, s.username, s.user_id`, id)
 	if err != nil {
 		return Board{}, err
 	}
-	return Board{Tournament: summary, Standings: standingItems, Fixtures: fixtureItems}, tx.Commit(ctx)
+	board := Board{Tournament: summary, Standings: standingItems, Fixtures: fixtureItems}
+	if summary.Format == singleElimination {
+		board.Bracket, err = readBracket(ctx, tx, summary)
+		if err != nil {
+			return Board{}, err
+		}
+	}
+	return board, tx.Commit(ctx)
 }
 
 func (s *Service) Join(ctx context.Context, userID, id uuid.UUID) error {
@@ -273,15 +282,20 @@ func (s *Service) Transition(ctx context.Context, actorID, id uuid.UUID, input T
 			}
 			break
 		}
-		if (input.Format != "" && input.Format != "round_robin") || len(input.TaskSlugs) != 0 {
+		format := input.Format
+		if format == "" {
+			format = "round_robin"
+		}
+		if len(input.TaskSlugs) != 0 || (format != "round_robin" && format != singleElimination) ||
+			(format == singleElimination && schedule.empty()) {
 			return access.ErrInvalidInput
 		}
-		result, err := tx.Exec(ctx, `update tournaments set task_id=tasks.id, status='published',
+		result, err := tx.Exec(ctx, `update tournaments set task_id=tasks.id, status='published', format=$6,
 			registration_closes_at=$3, starts_at=$4, ends_at=$5
 			from tasks where tournaments.id=$1 and tasks.slug=$2 and tasks.is_active
 			and ($3::timestamptz is null or $3 > clock_timestamp())
 			and exists (select 1 from task_languages where task_id=tasks.id and is_enabled)`,
-			id, input.TaskSlug, schedule.RegistrationClosesAt, schedule.StartsAt, schedule.EndsAt)
+			id, input.TaskSlug, schedule.RegistrationClosesAt, schedule.StartsAt, schedule.EndsAt, format)
 		if err != nil {
 			return err
 		}
@@ -300,7 +314,7 @@ func (s *Service) Transition(ctx context.Context, actorID, id uuid.UUID, input T
 			return access.ErrConflict
 		}
 	case "completed":
-		if draft.Status != "running" || draft.Format == sharedProblemSet {
+		if draft.Status != "running" || draft.Format != "round_robin" {
 			return access.ErrConflict
 		}
 		var unfinished bool
@@ -343,19 +357,21 @@ func (s *Service) ScheduleFixture(ctx context.Context, actorID, tournamentID, fi
 		return uuid.Nil, access.ErrConflict
 	}
 	var player1, player2 uuid.UUID
-	var previousStatus, player1Name, player2Name string
-	err = tx.QueryRow(ctx, `select f.player1_id,f.player2_id,coalesce(m.status,'unscheduled'),p1.username,p2.username
+	var previousStatus, previousResult, player1Name, player2Name string
+	err = tx.QueryRow(ctx, `select f.player1_id,f.player2_id,coalesce(m.status,'unscheduled'),
+		coalesce(m.result_type,''),p1.username,p2.username
 		from tournament_fixtures f left join matches m on m.id=f.match_id
 		join users p1 on p1.id=f.player1_id join users p2 on p2.id=f.player2_id
 		where f.tournament_id=$1 and f.id=$2`, tournamentID, fixtureID).
-		Scan(&player1, &player2, &previousStatus, &player1Name, &player2Name)
+		Scan(&player1, &player2, &previousStatus, &previousResult, &player1Name, &player2Name)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, access.ErrNotFound
 	}
 	if err != nil {
 		return uuid.Nil, err
 	}
-	if previousStatus != "unscheduled" && previousStatus != "cancelled" {
+	replayDraw := draft.Format == singleElimination && previousStatus == "finished" && previousResult == "draw"
+	if previousStatus != "unscheduled" && previousStatus != "cancelled" && !replayDraw {
 		return uuid.Nil, access.ErrConflict
 	}
 	if err := matches.PreparePlayersForMatch(ctx, tx, player1, player2); err != nil {
